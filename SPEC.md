@@ -11,16 +11,19 @@
 
 ## Integrantes da dupla
 
-- **Aluno 1 - Nome**: <mark>`<preencher>`</mark>
-- **Aluno 1 - Cartão UFRGS**: <mark>`<preencher>`</mark>
+- **Aluno 1 - Nome**: Guilherme Guimarães Amaro da Silveira
+- **Aluno 1 - Cartão UFRGS**: 587312
 
-- **Aluno 2 - Nome**: <mark>`<preencher>`</mark>
-- **Aluno 2 - Cartão UFRGS**: <mark>`<preencher>`</mark>
+- **Aluno 2 - Nome**: Eduardo Altmann de Bem
+- **Aluno 2 - Cartão UFRGS**: 594993
 
 ## Detalhes do que será implementado
 
-- **Título do trabalho**: <mark>`<preencher>`</mark>
-- **Parágrafo curto descrevendo o que será implementado**: <mark>`<preencher>`</mark>
+- **Título do trabalho**: Slenderman Clone
+- **Parágrafo curto descrevendo o que será implementado**: 
+Clone do jogo Slenderman: Eight Pages. Será implementado todo o fluxo
+do jogo; desde a tela inicial até os finais possíveis. As tecnologias usadas
+serão Rust e WebGPU.
 
 ## Especificação visual
 
@@ -39,7 +42,7 @@
 >   do próprio repositório. Mas, garanta que qualquer um tenha
 >   permissão de acesso ao vídeo através deste link.
 
-<mark>`<preencher>`</mark>
+https://www.youtube.com/watch?v=0BswJKtn_9o
 
 ### Vídeo - Timestamp
 
@@ -48,8 +51,8 @@
 >   será a base de comparação para avaliar se o seu trabalho final
 >   conseguiu ou não reproduzir a referência.
 
-- **Timestamp inicial**: <mark>`<preencher>`</mark>
-- **Timestamp final**: <mark>`<preencher>`</mark>
+- **Timestamp inicial**: 0:21
+- **Timestamp final**: 0:51
 
 ### Imagens
 
@@ -65,19 +68,19 @@
 
 #### Imagem 1
 
-- **Descrição**: <mark>`<preencher>`</mark>
+- **Descrição**: Visão dos corredores internos da construção.
 
 ![Imagem 1](images/spec/image1.jpg)
 
 #### Imagem 2
 
-- **Descrição**: <mark>`<preencher>`</mark>
+- **Descrição**: Uma das páginas que o jogador precisa coletar.
 
 ![Imagem 2](images/spec/image2.jpg)
 
 #### Imagem 3
 
-- **Descrição**: <mark>`<preencher>`</mark>
+- **Descrição**: O próprio antagonista 'Slenderman' encarando o jogador.
 
 ![Imagem 3](images/spec/image3.jpg)
 
@@ -86,31 +89,33 @@
 Para cada um dos requisitos abaixo (detalhados no [Enunciado do Trabalho final - Moodle](https://moodle.ufrgs.br/mod/assign/view.php?id=6302370)), escreva um parágrafo **curto** explicando como este requisito será atendido, apontando itens específicos do vídeo/imagens que você incluiu acima que atendem estes requisitos.
 
 ### Malhas poligonais complexas
-<mark>`<preencher>`</mark>
+O mapa inclui modelos poligonais complexos, como carros, árvores, e o antagonista.
 
 ### Transformações geométricas controladas pelo usuário
-<mark>`<preencher>`</mark>
+O usuário poderá abrir e fechar portas e pegar as páginas.
 
 ### Diferentes tipos de câmeras
-<mark>`<preencher>`</mark>
+Durante a tela inicial, teremos uma look-at camera orbitando pontos de interesse do mapa.
+Durante a jogatina, o jogador possui uma câmera livre first-person.
 
 ### Instâncias de objetos
-<mark>`<preencher>`</mark>
+O mapa possui várias árvores que são instâncias do mesmo modelo e alguns outros objetos repetidos.
 
 ### Testes de intersecção
-<mark>`<preencher>`</mark>
+O jogador irá colidir contra objetos físicos (paredes, carros, árvores), e não poderá atravessá-los.
 
 ### Modelos de Iluminação em todos os objetos
-<mark>`<preencher>`</mark>
+O jogador possui uma lanterna que pode iluminar os objetos do mapa.
 
 ### Mapeamento de texturas em todos os objetos
-<mark>`<preencher>`</mark>
+Todos os objetos do mapa possuem texturas.
 
 ### Movimentação com curva Bézier cúbica
-<mark>`<preencher>`</mark>
+Faremos vagalumes no jogo que se movimentarão utilizando curvas Bézier cúbicas.
 
 ### Animações baseadas no tempo ($\Delta t$)
-<mark>`<preencher>`</mark>
+Todas as animações serão baseadas no delta t, como as folhas das árvores, portas abrindo e fechando,
+movimentação do jogador etc.
 
 ### Funcionalidade extra obrigatória
 
@@ -120,7 +125,8 @@ Para cada um dos requisitos abaixo (detalhados no [Enunciado do Trabalho final -
 > - Esta funcionalidade também deverá ser documentada no arquivo
 >   `README.md` da entrega final.
 
-<mark>`<preencher>`</mark>
+O jogador poderá abrir e fechar portas, e objetos como janelas e poças
+mostrarão o reflexo do mapa/jogador/camera.
 
 ## Limitações esperadas
 
@@ -131,4 +137,13 @@ Para cada um dos requisitos abaixo (detalhados no [Enunciado do Trabalho final -
 > - Para cada item, **explique por que** não será implementado ou por
 >   que será implementado parcialmente.
 
-<mark>`<preencher>`</mark>
+1. Modelo do Slenderman:
+    O modelo do slenderman não será igual ao do jogo, pois não temos acesso ao modelo original.
+    Portanto, iremos usar um modelo open-source ou criar o nosso modelo.
+2. Mapa do jogo:
+    Também não temos acesso ao mapa do jogo, então teremos que recriá-lo. Tentaremos deixar o mapa
+    o mais fiel possível, mas talvez adicionemos alguns elementos para demonstrar melhor as funcionalidades
+    do trabalho.
+3. Páginas:
+    As páginas não terão as mesmas ilustrações das originais. Faremos a nossa própria arte, ou pegaremos imagens
+    do Google com as respectivas licenças, ou elas serão geradas por IA.
