@@ -70,19 +70,19 @@ https://www.youtube.com/watch?v=0BswJKtn_9o
 
 - **Descrição**: Visão dos corredores internos da construção.
 
-![Imagem 1](images/spec/image1.jpg)
+![Imagem 1](images/spec/image1.jpeg)
 
 #### Imagem 2
 
 - **Descrição**: Uma das páginas que o jogador precisa coletar.
 
-![Imagem 2](images/spec/image2.jpg)
+![Imagem 2](images/spec/image2.jpeg)
 
 #### Imagem 3
 
 - **Descrição**: O próprio antagonista 'Slenderman' encarando o jogador.
 
-![Imagem 3](images/spec/image3.jpg)
+![Imagem 3](images/spec/image3.jpeg)
 
 ## Especificação textual
 
