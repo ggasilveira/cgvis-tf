@@ -107,6 +107,8 @@ O jogador irá colidir contra objetos físicos (paredes, carros, árvores), e n�
 ### Modelos de Iluminação em todos os objetos
 O jogador possui uma lanterna que pode iluminar os objetos do mapa.
 
+> Comentário Professor: Implementem normal mapping para detalhar visualmente as superfícies dos objetos quando iluminados pela lanterna. Esse efeito está presente na referência visual.
+
 ### Mapeamento de texturas em todos os objetos
 Todos os objetos do mapa possuem texturas.
 
@@ -127,6 +129,8 @@ movimentação do jogador etc.
 
 O jogador poderá abrir e fechar portas, e objetos como janelas e poças
 mostrarão o reflexo do mapa/jogador/camera.
+
+> Comentário Professor: Não considerem a funcionalidade de abrir e fechar portas como a funcionalidade extra obrigatória. Vocês podem atender a esse requisito com a implementação de reflexos.
 
 ## Limitações esperadas
 
