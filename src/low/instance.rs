@@ -15,24 +15,20 @@ impl Instance {
         }
     }
     pub fn sample_insts() -> Vec<Self> {
+        const SPACE_BETWEEN: f32 = 3.0;
         const NUM_INSTANCES_PER_ROW: u32 = 10;
-        const INSTANCE_DISPLACEMENT: Vec3 = Vec3::new(
-            NUM_INSTANCES_PER_ROW as f32 * 0.5,
-            0.0,
-            NUM_INSTANCES_PER_ROW as f32 * 0.5,
-        );
-
         (0..NUM_INSTANCES_PER_ROW)
             .flat_map(|z| {
                 (0..NUM_INSTANCES_PER_ROW).map(move |x| {
-                    let position = Vec3::new(x as f32, 0.0, z as f32) - INSTANCE_DISPLACEMENT;
+                    let x = SPACE_BETWEEN * (x as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
+                    let z = SPACE_BETWEEN * (z as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
 
-                    let rotation = if position.length_squared() < 0.01 {
-                        // this is needed so an object at (0, 0, 0) won't get scaled to zero
-                        // as Quaternions can affect scale if they're not created correctly
-                        Quat::from_axis_angle(Vec3::Z, 0.0)
+                    let position = glam::Vec3::new(x, 0.0, z);
+
+                    let rotation = if position.length() < 0.01 {
+                        glam::Quat::from_axis_angle(glam::Vec3::Z, 0.)
                     } else {
-                        Quat::from_axis_angle(position.normalize(), 45_f32.to_radians())
+                        glam::Quat::from_axis_angle(position.normalize(), 45.0f32.to_radians())
                     };
 
                     Instance { position, rotation }
