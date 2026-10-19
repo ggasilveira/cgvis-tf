@@ -2,6 +2,7 @@ use crate::camera::{Camera, CameraController, CameraUniform};
 use crate::low::instance::*;
 use crate::low::model;
 use crate::low::texture;
+use crate::resources;
 use model::Vertex;
 use std::sync::Arc;
 
@@ -22,10 +23,6 @@ pub struct State {
     config: wgpu::SurfaceConfiguration,
     is_surface_configured: bool,
     render_pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    num_vertices: u32,
-    num_indices: u32,
     diffuse_bind_group: wgpu::BindGroup,
     diffuse_texture: texture::Texture,
     cam: Camera,
@@ -36,6 +33,7 @@ pub struct State {
     instances: Vec<Instance>,
     instance_buffer: wgpu::Buffer,
     depth_texture: texture::Texture,
+    obj_model: model::Model,
 }
 
 impl State {
@@ -224,19 +222,9 @@ impl State {
             cache: None,
         });
 
-        // let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        //     label: Some("Vertex Buffer"),
-        //     contents: bytemuck::cast_slice(VERTICES),
-        //     usage: wgpu::BufferUsages::VERTEX,
-        // });
-        // let num_vertices = VERTICES.len() as u32;
-
-        // let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        //     label: Some("Index Buffer"),
-        //     contents: bytemuck::cast_slice(INDICES),
-        //     usage: wgpu::BufferUsages::INDEX,
-        // });
-        // let num_indices = INDICES.len() as u32;
+        let obj_model =
+            resources::load_model("data/cube.obj", &device, &queue, &texture_bind_group_layout)
+                .unwrap();
 
         let instances = Instance::sample_insts();
         let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
@@ -254,10 +242,6 @@ impl State {
             config,
             is_surface_configured: false,
             render_pipeline,
-            vertex_buffer,
-            index_buffer,
-            num_vertices,
-            num_indices,
             diffuse_bind_group,
             diffuse_texture,
             cam,
@@ -268,6 +252,7 @@ impl State {
             instances,
             instance_buffer,
             depth_texture,
+            obj_model,
         })
     }
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -355,15 +340,16 @@ impl State {
             timestamp_writes: None,
             multiview_mask: None,
         });
-        render_pass.set_pipeline(&self.render_pipeline);
-        render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
-
-        render_pass.set_bind_group(1, &self.cam_bind_group, &[]);
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        render_pass.set_pipeline(&self.render_pipeline);
 
-        render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
+        use model::DrawModel;
+        render_pass.draw_model_instanced(
+            &self.obj_model,
+            0..self.instances.len() as u32,
+            &self.cam_bind_group,
+        );
+
         drop(render_pass);
 
         self.queue.submit(std::iter::once(encoder.finish()));

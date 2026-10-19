@@ -1,3 +1,4 @@
 pub mod app;
 pub mod camera;
 pub mod low;
+pub mod resources;
