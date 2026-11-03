@@ -138,23 +138,3 @@ impl CameraController {
         }
     }
 }
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct CameraUniform {
-    view_position: [f32; 4],
-    view_proj: [[f32; 4]; 4],
-}
-impl CameraUniform {
-    pub fn new() -> Self {
-        Self {
-            view_position: [0.; 4],
-            view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
-        }
-    }
-    pub fn update_view_proj(&mut self, cam: &Camera) {
-        // change this to `rows` if the uniform is row major
-        self.view_position = cam.eye.extend(1.).to_array();
-        self.view_proj = cam.build_matrix().to_cols_array_2d();
-    }
-}

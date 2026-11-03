@@ -54,8 +54,6 @@ impl Vertex for ModelVertex {
 
 pub struct Material {
     pub name: String,
-    pub diffuse_texture: texture::Texture,
-    pub normal_texture: texture::Texture,
     pub bind_group: wgpu::BindGroup,
 }
 impl Material {
@@ -90,8 +88,8 @@ impl Material {
         });
         Self {
             name: String::from(name),
-            diffuse_texture,
-            normal_texture,
+            //diffuse_texture,
+            //normal_texture,
             bind_group,
         }
     }

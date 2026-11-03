@@ -31,11 +31,38 @@ struct VertexOutput {
     @location(3) tangent_view_position: vec3<f32>,
 }
 
-@group(1) @binding(0)
+const LIGHT_DIR: u32 = 0;
+const LIGHT_POINT: u32 = 1;
+const LIGHT_SPOT: u32 = 2;
+struct Light {
+    // 16 bytes
+    position: vec3<f32>,
+    typ: u32,
+
+    // 16 bytes
+    direction: vec3<f32>,
+    padding0: u32,
+
+    // 16 bytes
+    color: vec3<f32>,
+    intensity: f32,
+
+    // 16 bytes
+    inner_angle: f32,
+    outer_angle: f32,
+    padding1: u32,
+    padding2: u32,
+}
+struct LightsUniform {
+    lights: array<Light, 16>,
+    size: u32,
+}
+
+@group(0) @binding(0)
 var<uniform> camera: Camera;
 
-@group(2) @binding(0)
-var<uniform> light: PointLight;
+@group(0) @binding(1)
+var<uniform> lights: LightsUniform;
 
 @vertex
 fn vs_main(model: VertexInput, instance: InstanceInput) -> VertexOutput {

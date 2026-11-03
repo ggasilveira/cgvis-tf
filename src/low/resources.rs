@@ -1,11 +1,10 @@
-use crate::low::context::Context;
+use crate::low::context::RenderContext;
+use crate::low::layout::{MaterialBindGroup, MaterialBindGroupLayout};
 use crate::low::model;
 use crate::low::texture::{CreateTextureArgs, Texture};
 use glam::{Vec2, Vec3};
-use std::collections::HashMap;
 use std::io::{BufReader, Cursor};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
 use wgpu::util::DeviceExt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,34 +17,35 @@ pub struct TextureHandle(usize);
 pub struct MaterialHandle(usize);
 pub struct ModelHandle(usize);
 pub struct Mesh {
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    num_elements: u32,
-    material: MaterialHandle,
+    pub vertex_buffer: wgpu::Buffer,
+    pub index_buffer: wgpu::Buffer,
+    pub num_elements: u32,
+    pub material: MaterialHandle,
 }
 pub struct Material {
-    diffuse: TextureHandle,
-    normal: TextureHandle,
+    pub diffuse: TextureHandle,
+    pub normal: TextureHandle,
+    pub bind_group: MaterialBindGroup,
 }
 pub struct Model {
-    meshes: Vec<Mesh>,
+    pub meshes: Vec<Mesh>,
 }
 
 pub struct ResourceManager {
-    context: Arc<Context>,
     textures: Vec<Texture>,
     materials: Vec<Material>,
+    material_bind_group_layout: MaterialBindGroupLayout,
     models: Vec<Model>,
     res_path: PathBuf,
 }
 impl ResourceManager {
-    pub fn new(context: Arc<Context>, resources_path: &str) -> Self {
+    pub fn new(device: &wgpu::Device, resources_path: &str) -> Self {
         let p = PathBuf::from(resources_path);
         assert!(p.is_dir(), "resources path must be a directory");
         Self {
-            context,
             textures: Vec::new(),
             materials: Vec::new(),
+            material_bind_group_layout: MaterialBindGroupLayout::new(device),
             models: Vec::new(),
             res_path: p,
         }
@@ -59,23 +59,37 @@ impl ResourceManager {
         self.materials.push(material);
         MaterialHandle(self.materials.len() - 1)
     }
+    pub fn get_model(&self, handle: ModelHandle) -> &Model {
+        &self.models[handle.0]
+    }
+    pub fn get_material(&self, handle: MaterialHandle) -> &Material {
+        &self.materials[handle.0]
+    }
+    pub fn get_texture(&self, handle: TextureHandle) -> &Texture {
+        &self.textures[handle.0]
+    }
     /// Loads an image as a texture into the GPU and returns its handle.
     /// The filename must be relative to the resources path
     pub fn load_texture(
         &mut self,
+        ctx: &RenderContext,
         filename: &str,
         args: CreateTextureArgs,
     ) -> anyhow::Result<TextureHandle> {
         let filepath = self.res_path.join(filename);
 
         let bytes = std::fs::read(filepath)?;
-        let txt = Texture::from_bytes(&self.context, &bytes, args, Some(filename))?;
+        let txt = Texture::from_bytes(ctx, &bytes, args, Some(filename))?;
         Ok(self.add_texture(txt))
     }
 
     /// Loads a model from a .obj file. Group and object diretives are both treated
     /// as meshes of a single object.
-    pub fn load_obj_model(&mut self, filename: &str) -> anyhow::Result<ModelHandle> {
+    pub fn load_obj_model(
+        &mut self,
+        ctx: &RenderContext,
+        filename: &str,
+    ) -> anyhow::Result<ModelHandle> {
         let obj_text = std::fs::read_to_string(filename)?;
         let obj_cursor = Cursor::new(obj_text);
         let mut obj_reader = BufReader::new(obj_cursor);
@@ -96,11 +110,11 @@ impl ResourceManager {
             );
             let diffuse_file = material.diffuse_texture.unwrap();
             let normal_file = material.normal_texture;
-            let diffuse_texture = self.load_texture(&diffuse_file, Texture::DEFAULT_ARGS)?;
+            let diffuse_texture = self.load_texture(ctx, &diffuse_file, Texture::DEFAULT_ARGS)?;
 
             // if there isn't a normal file, we'll create a normal "flat" texture
             let normal_texture = match normal_file {
-                Some(f) => self.load_texture(&f, Texture::NORMAL_ARGS)?,
+                Some(f) => self.load_texture(ctx, &f, Texture::NORMAL_ARGS)?,
                 None => {
                     let diffuse_size = self.textures[diffuse_texture.0].texture.size();
                     // a flat normal texture has all normal vectors as unit Z.
@@ -115,18 +129,20 @@ impl ResourceManager {
                         diffuse_size.height,
                         normal,
                     );
-                    let txt = Texture::from_image(
-                        &self.context,
-                        &img.into(),
-                        Texture::NORMAL_ARGS,
-                        None,
-                    )?;
+                    let txt = Texture::from_image(ctx, &img.into(), Texture::NORMAL_ARGS, None)?;
                     self.add_texture(txt)
                 }
             };
+            let bind_group = MaterialBindGroup::new(
+                &ctx.device,
+                &self.material_bind_group_layout,
+                &self.textures[diffuse_texture.0],
+                &self.textures[normal_texture.0],
+            );
             materials.push(self.add_material(Material {
                 diffuse: diffuse_texture,
                 normal: normal_texture,
+                bind_group,
             }));
         }
         let meshes = models
@@ -154,16 +170,14 @@ impl ResourceManager {
                 build_normal_space(&mut vertices, &m.mesh.indices);
 
                 let vertex_buffer =
-                    self.context
-                        .device
+                    ctx.device
                         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                             label: Some(&format!("{:?} Vertex Buffer", filename)),
                             contents: bytemuck::cast_slice(&vertices),
                             usage: wgpu::BufferUsages::VERTEX,
                         });
                 let index_buffer =
-                    self.context
-                        .device
+                    ctx.device
                         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                             label: Some(&format!("{:?} Index Buffer", filename)),
                             contents: bytemuck::cast_slice(&m.mesh.indices),
