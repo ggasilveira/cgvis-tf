@@ -7,14 +7,16 @@ use std::io::{BufReader, Cursor};
 use std::path::PathBuf;
 use wgpu::util::DeviceExt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MeshHandle(usize);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TextureHandle(usize);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MaterialHandle(usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ModelHandle(usize);
 pub struct Mesh {
     pub vertex_buffer: wgpu::Buffer,
@@ -28,13 +30,14 @@ pub struct Material {
     pub bind_group: MaterialBindGroup,
 }
 pub struct Model {
-    pub meshes: Vec<Mesh>,
+    pub meshes: Vec<MeshHandle>,
 }
 
 pub struct ResourceManager {
     textures: Vec<Texture>,
     materials: Vec<Material>,
     material_bind_group_layout: MaterialBindGroupLayout,
+    meshes: Vec<Mesh>,
     models: Vec<Model>,
     res_path: PathBuf,
 }
@@ -47,6 +50,7 @@ impl ResourceManager {
             materials: Vec::new(),
             material_bind_group_layout: MaterialBindGroupLayout::new(device),
             models: Vec::new(),
+            meshes: Vec::new(),
             res_path: p,
         }
     }
@@ -54,6 +58,10 @@ impl ResourceManager {
     fn add_texture(&mut self, texture: Texture) -> TextureHandle {
         self.textures.push(texture);
         TextureHandle(self.textures.len() - 1)
+    }
+    fn add_mesh(&mut self, mesh: Mesh) -> MeshHandle {
+        self.meshes.push(mesh);
+        MeshHandle(self.meshes.len() - 1)
     }
     fn add_material(&mut self, material: Material) -> MaterialHandle {
         self.materials.push(material);
@@ -184,12 +192,12 @@ impl ResourceManager {
                             usage: wgpu::BufferUsages::INDEX,
                         });
 
-                Mesh {
+                self.add_mesh(Mesh {
                     vertex_buffer,
                     index_buffer,
                     num_elements: m.mesh.indices.len() as u32,
                     material: materials[m.mesh.material_id.unwrap_or(0)],
-                }
+                })
             })
             .collect::<Vec<_>>();
         self.models.push(Model { meshes });

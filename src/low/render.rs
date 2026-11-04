@@ -8,16 +8,7 @@ use crate::low::texture;
 use crate::low::uniform::{CameraUniform, LightsUniform};
 use crate::low::{instance::*, layout};
 use model::Vertex;
-use std::sync::Arc;
-
-use wgpu::util::DeviceExt;
-use winit::{
-    application::ApplicationHandler,
-    event::*,
-    event_loop::{ActiveEventLoop, EventLoop},
-    keyboard::{KeyCode, PhysicalKey},
-    window::Window,
-};
+use std::collections::HashMap;
 
 fn create_render_pipeline(
     device: &wgpu::Device,
@@ -88,8 +79,6 @@ pub struct RenderState {
     camera_buffer: Buffer<CameraUniform>,
     global_bind_group: GlobalBindGroup,
     camera_controller: CameraController,
-    instances: Vec<Instance>,
-    instance_buffer: Buffer<[InstanceRaw]>,
     depth_texture: texture::Texture,
     lights_uniform: LightsUniform,
     lights_buffer: Buffer<LightsUniform>,
@@ -137,7 +126,7 @@ impl RenderState {
                 &render_pipeline_layout,
                 context.config.format,
                 Some(texture::Texture::DEPTH_FORMAT),
-                &[Some(model::ModelVertex::desc()), Some(InstanceRaw::desc())],
+                &[Some(model::ModelVertex::desc())],
                 shader,
             )
         };
@@ -166,10 +155,6 @@ impl RenderState {
         //     resources::load_model("data/cube.obj", &device, &queue, &texture_bind_group_layout)
         //         .unwrap();
 
-        let instances = Instance::sample_insts();
-        let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
-        let instance_buffer = Buffer::new(&context.device, instance_data.as_slice());
-
         Ok(Self {
             is_surface_configured: false,
             render_pipeline,
@@ -180,8 +165,6 @@ impl RenderState {
             lights_uniform,
             lights_buffer,
             camera_controller: CameraController::new(0.2),
-            instances,
-            instance_buffer,
             depth_texture,
         })
     }
@@ -287,6 +270,7 @@ impl RenderState {
 }
 
 pub struct RenderCommands<'a> {
+    render_state: &'a mut RenderState,
     render_pass: wgpu::RenderPass<'a>,
     resources: &'a ResourceManager,
 }
@@ -294,7 +278,7 @@ impl<'a> RenderCommands<'a> {
     pub fn draw_model(
         &mut self,
         model: ModelHandle,
-        instances: &Buffer<[InstanceRaw]>,
+        instances: &[TransformRaw],
         num_instances: u32,
     ) {
         let model = self.resources.get_model(model);

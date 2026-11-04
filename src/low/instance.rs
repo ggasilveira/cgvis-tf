@@ -130,39 +130,79 @@ impl StaticInstanceMap {
 
         let mut staging_bytes: Vec<u8> = Vec::new();
 
-        for (mesh, instances) in self.mesh_map.iter() {
-            if instances.is_empty() {
-                continue;
-            }
-            let current_offset = staging_bytes.len();
-            assert_eq!(current_offset % SLICE_ALIGN, 0);
-
-            // append raw instances to byte vector
-            for inst in instances.iter().map(|i| i.to_raw()) {
-                staging_bytes.extend_from_slice(bytemuck::bytes_of(&inst));
-            }
-
-            // fill the difference between the alignment and the byte vector
-            // with 0's
-            let remainder = staging_bytes.len() % SLICE_ALIGN;
-            if remainder != 0 {
-                let padding = SLICE_ALIGN - remainder;
-                staging_bytes.resize(staging_bytes.len() + padding, 0);
-            }
-
-            mesh_infos.insert(
-                *mesh,
-                MeshSliceInfo {
-                    instance_count: instances.len() as u32,
-                    buffer_byte_offset: current_offset as u32,
-                },
-            );
-        }
+        fill_staging(&mut staging_bytes, &mut mesh_infos, &self.mesh_map);
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("static instance buffer"),
             contents: &staging_bytes,
             usage: wgpu::BufferUsages::STORAGE,
         });
         StaticInstanceBuffer { buffer, mesh_infos }
+    }
+}
+fn fill_staging(
+    staging_bytes: &mut Vec<u8>,
+    mesh_infos: &mut HashMap<MeshHandle, MeshSliceInfo>,
+    mesh_map: &HashMap<MeshHandle, Vec<Instance>>,
+) {
+    const SLICE_ALIGN: usize = 256;
+
+    for (mesh, instances) in mesh_map.iter() {
+        if instances.is_empty() {
+            continue;
+        }
+        let current_offset = staging_bytes.len();
+        assert_eq!(current_offset % SLICE_ALIGN, 0);
+
+        // append raw instances to byte vector
+        for inst in instances.iter().map(|i| i.to_raw()) {
+            staging_bytes.extend_from_slice(bytemuck::bytes_of(&inst));
+        }
+
+        // fill the difference between the alignment and the byte vector
+        // with 0's
+        let remainder = staging_bytes.len() % SLICE_ALIGN;
+        if remainder != 0 {
+            let padding = SLICE_ALIGN - remainder;
+            staging_bytes.resize(staging_bytes.len() + padding, 0);
+        }
+
+        mesh_infos.insert(
+            *mesh,
+            MeshSliceInfo {
+                instance_count: instances.len() as u32,
+                buffer_byte_offset: current_offset as u32,
+            },
+        );
+    }
+}
+
+pub struct DynamicInstanceMap {
+    mesh_map: HashMap<MeshHandle, Vec<Instance>>,
+    mesh_info: HashMap<MeshHandle, MeshSliceInfo>,
+    staging_bytes: Vec<u8>,
+    buffer: Option<wgpu::Buffer>,
+    buffer_len: u32,
+}
+impl DynamicInstanceMap {
+    pub fn new() -> Self {
+        Self {
+            buffer: None,
+            buffer_len: 0,
+            mesh_map: HashMap::new(),
+            mesh_info: HashMap::new(),
+            staging_bytes: Vec::new(),
+        }
+    }
+    pub fn add_instance(&mut self, mesh: MeshHandle, instance: Instance) {
+        self.mesh_map.entry(mesh).or_default().push(instance);
+    }
+    pub fn clear_instances(&mut self) {
+        self.mesh_map.clear();
+    }
+    pub fn update_buffer(&mut self, queue: &wgpu::Queue, device: &wgpu::Device) {}
+    pub fn buffer(&self) -> &wgpu::Buffer {
+        self.buffer
+            .as_ref()
+            .expect("Buffer should be updated at least once before being retrieved")
     }
 }

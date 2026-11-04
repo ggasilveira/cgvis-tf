@@ -6,11 +6,11 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 
 #[derive(Debug, Clone)]
 pub struct Input {
-    down_keys: HashSet<KeyCode>,
-    down_mouse: HashSet<MouseButton>,
-    clicked_keys: HashSet<KeyCode>,
-    clicked_mouse: HashSet<MouseButton>,
-    mouse_delta: Vec2,
+    pub down_keys: HashSet<KeyCode>,
+    pub down_mouse: HashSet<MouseButton>,
+    pub clicked_keys: HashSet<KeyCode>,
+    pub clicked_mouse: HashSet<MouseButton>,
+    pub mouse_delta: Vec2,
 }
 impl Input {
     pub fn new() -> Self {
