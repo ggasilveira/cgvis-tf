@@ -1,15 +1,36 @@
+use crate::low::bindgroup::{
+    GlobalBindGroup, GlobalBindGroupLayout, MaterialBindGroup, MaterialBindGroupLayout,
+};
 use crate::low::buffer::Buffer;
-use crate::low::camera::{Camera, CameraController};
+use crate::low::camera::Camera;
 use crate::low::context::RenderContext;
-use crate::low::layout::{GlobalBindGroup, GlobalBindGroupLayout, RenderPipelineLayout};
+use crate::low::instance::*;
 use crate::low::model;
-use crate::low::resources::{MeshHandle, ModelHandle, ResourceManager};
+use crate::low::resources::ResourceManager;
 use crate::low::texture;
 use crate::low::uniform::{CameraUniform, LightsUniform};
-use crate::low::{instance::*, layout};
 use model::Vertex;
-use std::collections::HashMap;
 
+struct RenderPipelineLayout {
+    layout: wgpu::PipelineLayout,
+}
+impl RenderPipelineLayout {
+    pub fn new(
+        device: &wgpu::Device,
+        global_layout: &GlobalBindGroupLayout,
+        material_layout: &MaterialBindGroupLayout,
+    ) -> Self {
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("render_pipeline_layout"),
+            bind_group_layouts: &[Some(global_layout.layout()), Some(material_layout.layout())],
+            immediate_size: 0,
+        });
+        Self { layout }
+    }
+    pub fn layout(&self) -> &wgpu::PipelineLayout {
+        &self.layout
+    }
+}
 fn create_render_pipeline(
     device: &wgpu::Device,
     layout: &RenderPipelineLayout,
@@ -77,18 +98,19 @@ pub struct RenderState {
     camera: Camera,
     camera_uniform: CameraUniform,
     camera_buffer: Buffer<CameraUniform>,
-    global_bind_group: GlobalBindGroup,
-    camera_controller: CameraController,
     depth_texture: texture::Texture,
     lights_uniform: LightsUniform,
     lights_buffer: Buffer<LightsUniform>,
-    //light_render_pipeline: wgpu::RenderPipeline,
+    static_global_bg: GlobalBindGroup,
+    dynamic_global_bg: GlobalBindGroup,
+    dyn_instance_map: DynamicInstanceMap,
+    static_instance_buffer: StaticInstanceBuffer,
+    global_bind_group_layout: GlobalBindGroupLayout,
+    material_bind_group_layout: MaterialBindGroupLayout,
 }
 
 impl RenderState {
     pub fn new(context: &RenderContext) -> anyhow::Result<Self> {
-        let material_bind_group_layout = layout::MaterialBindGroupLayout::new(&context.device);
-
         let camera = Camera {
             eye: glam::Vec3::new(0.0, 1.0, 2.0),
             target: glam::Vec3::ZERO,
@@ -103,12 +125,23 @@ impl RenderState {
         let lights_uniform = LightsUniform::new();
         let lights_buffer = Buffer::new(&context.device, &lights_uniform);
 
+        let material_bind_group_layout = MaterialBindGroupLayout::new(&context.device);
         let global_bind_group_layout = GlobalBindGroupLayout::new(&context.device);
-        let global_bind_group = GlobalBindGroup::new(
+        let dyn_instance_map = DynamicInstanceMap::new();
+        let static_instance_buffer = StaticInstanceMap::new().bake(&context.device);
+        let static_global_bg = GlobalBindGroup::new_static(
             &context.device,
             &global_bind_group_layout,
             &camera_buffer,
             &lights_buffer,
+            &static_instance_buffer,
+        );
+        let dynamic_global_bg = GlobalBindGroup::new_dynamic(
+            &context.device,
+            &global_bind_group_layout,
+            &camera_buffer,
+            &lights_buffer,
+            &dyn_instance_map,
         );
 
         let render_pipeline_layout = RenderPipelineLayout::new(
@@ -130,42 +163,22 @@ impl RenderState {
                 shader,
             )
         };
-        // lib.rs
-        // let light_render_pipeline = {
-        //     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        //         label: Some("Light Pipeline Layout"),
-        //         bind_group_layouts: &[Some(&cam_bind_group_layout), Some(&light_bind_group_layout)],
-        //         immediate_size: 0,
-        //     });
-        //     let shader = wgpu::ShaderModuleDescriptor {
-        //         label: Some("Light Shader"),
-        //         source: wgpu::ShaderSource::Wgsl(include_str!("light.wgsl").into()),
-        //     };
-        //     create_render_pipeline(
-        //         &device,
-        //         &layout,
-        //         config.format,
-        //         Some(texture::Texture::DEPTH_FORMAT),
-        //         &[Some(model::ModelVertex::desc())],
-        //         shader,
-        //     )
-        // };
-
-        // let obj_model =
-        //     resources::load_model("data/cube.obj", &device, &queue, &texture_bind_group_layout)
-        //         .unwrap();
 
         Ok(Self {
             is_surface_configured: false,
             render_pipeline,
-            global_bind_group,
+            static_global_bg,
+            dynamic_global_bg,
             camera,
             camera_uniform,
             camera_buffer,
             lights_uniform,
             lights_buffer,
-            camera_controller: CameraController::new(0.2),
             depth_texture,
+            dyn_instance_map,
+            static_instance_buffer,
+            global_bind_group_layout,
+            material_bind_group_layout,
         })
     }
     pub fn resize(&mut self, context: &mut RenderContext, width: u32, height: u32) {
@@ -180,16 +193,50 @@ impl RenderState {
     pub fn update_cam_uniform(&mut self, context: &RenderContext, cam_uniform: CameraUniform) {
         self.camera_buffer.update(&context.queue, &cam_uniform);
     }
+    pub fn dyn_instance_map(&mut self) -> &mut DynamicInstanceMap {
+        &mut self.dyn_instance_map
+    }
+    pub fn set_static_instance_buffer(
+        &mut self,
+        ctx: &RenderContext,
+        buffer: StaticInstanceBuffer,
+    ) {
+        self.static_instance_buffer = buffer;
+        self.rebind_static(ctx);
+    }
+    fn rebind_static(&mut self, ctx: &RenderContext) {
+        self.static_global_bg = GlobalBindGroup::new_static(
+            &ctx.device,
+            &self.global_bind_group_layout,
+            &self.camera_buffer,
+            &self.lights_buffer,
+            &self.static_instance_buffer,
+        );
+    }
+    fn rebind_dynamic(&mut self, ctx: &RenderContext) {
+        self.dynamic_global_bg = GlobalBindGroup::new_dynamic(
+            &ctx.device,
+            &self.global_bind_group_layout,
+            &self.camera_buffer,
+            &self.lights_buffer,
+            &self.dyn_instance_map,
+        );
+    }
     fn render(
         &mut self,
         context: &RenderContext,
         resources: &ResourceManager,
-        commands: impl FnOnce(&mut RenderCommands),
     ) -> anyhow::Result<()> {
         context.window.request_redraw();
 
         if !self.is_surface_configured {
             return Ok(());
+        }
+
+        // update the global bind group
+        if self.dyn_instance_map.is_dirty() {
+            self.dyn_instance_map.clear_dirty();
+            self.rebind_dynamic(context);
         }
 
         let output = match context.surface.get_current_texture() {
@@ -247,11 +294,45 @@ impl RenderState {
 
         render_pass.set_pipeline(&self.render_pipeline);
 
-        let mut render_commands = RenderCommands {
-            render_pass,
-            resources,
-        };
-        commands(&mut render_commands);
+        // we set once for drawing static instances
+        render_pass.set_bind_group(
+            GlobalBindGroup::GROUP,
+            self.static_global_bg.bind_group(),
+            &[],
+        );
+
+        for (mesh_handle, mesh_range) in self.static_instance_buffer.mesh_ranges() {
+            let mesh = resources.get_mesh(mesh_handle);
+            let material = resources.get_material(mesh.material);
+            render_pass.set_bind_group(
+                MaterialBindGroup::GROUP,
+                material.bind_group.bind_group(),
+                &[],
+            );
+            render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..mesh.num_elements, 0, mesh_range.instance_range());
+        }
+
+        // and another for the dynamic instances
+        render_pass.set_bind_group(
+            GlobalBindGroup::GROUP,
+            self.dynamic_global_bg.bind_group(),
+            &[],
+        );
+
+        for (mesh_handle, mesh_range) in self.dyn_instance_map.mesh_ranges() {
+            let mesh = resources.get_mesh(mesh_handle);
+            let material = resources.get_material(mesh.material);
+            render_pass.set_bind_group(
+                MaterialBindGroup::GROUP,
+                material.bind_group.bind_group(),
+                &[],
+            );
+            render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..mesh.num_elements, 0, mesh_range.instance_range());
+        }
 
         // use model::DrawLight;
         // render_pass.set_pipeline(&self.light_render_pipeline);
@@ -260,41 +341,10 @@ impl RenderState {
         //     &self.cam_bind_group,
         //     &self.light_bind_group,
         // );
-
-        drop(render_commands);
+        drop(render_pass);
 
         context.queue.submit(std::iter::once(encoder.finish()));
         context.queue.present(output);
         Ok(())
-    }
-}
-
-pub struct RenderCommands<'a> {
-    render_state: &'a mut RenderState,
-    render_pass: wgpu::RenderPass<'a>,
-    resources: &'a ResourceManager,
-}
-impl<'a> RenderCommands<'a> {
-    pub fn draw_model(
-        &mut self,
-        model: ModelHandle,
-        instances: &[TransformRaw],
-        num_instances: u32,
-    ) {
-        let model = self.resources.get_model(model);
-        self.render_pass
-            .set_vertex_buffer(1, instances.buffer().slice(..));
-
-        for mesh in model.meshes.iter() {
-            let material = self.resources.get_material(mesh.material);
-            self.render_pass
-                .set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-            self.render_pass
-                .set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            self.render_pass
-                .set_bind_group(1, material.bind_group.bind_group(), &[]);
-            self.render_pass
-                .draw_indexed(0..mesh.num_elements, 0, 0..num_instances);
-        }
     }
 }

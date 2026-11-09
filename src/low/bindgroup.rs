@@ -1,3 +1,4 @@
+use crate::low::instance::{DynamicInstanceMap, StaticInstanceBuffer};
 use crate::low::uniform::{CameraUniform, LightsUniform};
 use crate::low::{buffer::Buffer, texture::Texture};
 
@@ -7,6 +8,7 @@ pub struct MaterialBindGroupLayout {
     layout: wgpu::BindGroupLayout,
 }
 impl MaterialBindGroupLayout {
+    pub const GROUP: u32 = 1;
     pub fn descriptor() -> wgpu::BindGroupLayoutDescriptor<'static> {
         wgpu::BindGroupLayoutDescriptor {
             entries: &[
@@ -59,6 +61,7 @@ pub struct MaterialBindGroup {
     bind_group: wgpu::BindGroup,
 }
 impl MaterialBindGroup {
+    pub const GROUP: u32 = MaterialBindGroupLayout::GROUP;
     pub fn new(
         device: &wgpu::Device,
         layout: &MaterialBindGroupLayout,
@@ -100,6 +103,7 @@ pub struct GlobalBindGroupLayout {
     layout: wgpu::BindGroupLayout,
 }
 impl GlobalBindGroupLayout {
+    pub const GROUP: u32 = 1;
     // Camera bind group layout. Will be in group 0
     pub fn descriptor() -> wgpu::BindGroupLayoutDescriptor<'static> {
         wgpu::BindGroupLayoutDescriptor {
@@ -126,13 +130,13 @@ impl GlobalBindGroupLayout {
                     },
                     count: None,
                 },
-                // global instance buffer
+                // instance buffer
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: true,
+                        has_dynamic_offset: false,
                         min_binding_size: None,
                     },
                     count: None,
@@ -156,11 +160,14 @@ pub struct GlobalBindGroup {
     bind_group: wgpu::BindGroup,
 }
 impl GlobalBindGroup {
-    pub fn new(
+    pub const GROUP: u32 = GlobalBindGroupLayout::GROUP;
+    fn new_raw(
         device: &wgpu::Device,
         layout: &GlobalBindGroupLayout,
         camera_buffer: &Buffer<CameraUniform>,
         lights_buffer: &Buffer<LightsUniform>,
+        instance_buffer: &wgpu::Buffer,
+        label: Option<&str>,
     ) -> Self {
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &layout.layout,
@@ -174,33 +181,48 @@ impl GlobalBindGroup {
                     binding: 1,
                     resource: lights_buffer.buffer().as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: instance_buffer.as_entire_binding(),
+                },
             ],
-            label: Some("Global Bind Group"),
+            label,
         });
         Self { bind_group }
     }
+    pub fn new_static(
+        device: &wgpu::Device,
+        layout: &GlobalBindGroupLayout,
+        camera_buffer: &Buffer<CameraUniform>,
+        lights_buffer: &Buffer<LightsUniform>,
+        static_instance_buffer: &StaticInstanceBuffer,
+    ) -> Self {
+        Self::new_raw(
+            device,
+            layout,
+            camera_buffer,
+            lights_buffer,
+            static_instance_buffer.buffer(),
+            Some("Static Global Bind Group"),
+        )
+    }
+    pub fn new_dynamic(
+        device: &wgpu::Device,
+        layout: &GlobalBindGroupLayout,
+        camera_buffer: &Buffer<CameraUniform>,
+        lights_buffer: &Buffer<LightsUniform>,
+        dyn_instance_map: &DynamicInstanceMap,
+    ) -> Self {
+        Self::new_raw(
+            device,
+            layout,
+            camera_buffer,
+            lights_buffer,
+            dyn_instance_map.buffer(),
+            Some("Dynamic Global Bind Group"),
+        )
+    }
     pub fn bind_group(&self) -> &wgpu::BindGroup {
         &self.bind_group
-    }
-}
-
-pub struct RenderPipelineLayout {
-    layout: wgpu::PipelineLayout,
-}
-impl RenderPipelineLayout {
-    pub fn new(
-        device: &wgpu::Device,
-        global_layout: &GlobalBindGroupLayout,
-        material_layout: &MaterialBindGroupLayout,
-    ) -> Self {
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("render_pipeline_layout"),
-            bind_group_layouts: &[Some(global_layout.layout()), Some(material_layout.layout())],
-            immediate_size: 0,
-        });
-        Self { layout }
-    }
-    pub fn layout(&self) -> &wgpu::PipelineLayout {
-        &self.layout
     }
 }

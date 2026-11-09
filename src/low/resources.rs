@@ -1,5 +1,5 @@
+use crate::low::bindgroup::{MaterialBindGroup, MaterialBindGroupLayout};
 use crate::low::context::RenderContext;
-use crate::low::layout::{MaterialBindGroup, MaterialBindGroupLayout};
 use crate::low::model;
 use crate::low::texture::{CreateTextureArgs, Texture};
 use glam::{Vec2, Vec3};
@@ -7,16 +7,16 @@ use std::io::{BufReader, Cursor};
 use std::path::PathBuf;
 use wgpu::util::DeviceExt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MeshHandle(usize);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TextureHandle(usize);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MaterialHandle(usize);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModelHandle(usize);
 pub struct Mesh {
     pub vertex_buffer: wgpu::Buffer,
@@ -75,6 +75,15 @@ impl ResourceManager {
     }
     pub fn get_texture(&self, handle: TextureHandle) -> &Texture {
         &self.textures[handle.0]
+    }
+    pub fn get_mesh(&self, handle: MeshHandle) -> &Mesh {
+        &self.meshes[handle.0]
+    }
+    pub fn models(&self) -> impl Iterator<Item = (ModelHandle, &Model)> {
+        self.models
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (ModelHandle(i), m))
     }
     /// Loads an image as a texture into the GPU and returns its handle.
     /// The filename must be relative to the resources path

@@ -2,8 +2,11 @@ mod api;
 mod context;
 mod input;
 mod object;
+use std::collections::HashMap;
+
 use crate::low::context::RenderContext;
 use crate::low::render::RenderState;
+use crate::low::resources::ModelHandle;
 use input::Input;
 use winit::event::{KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
@@ -13,6 +16,7 @@ pub struct Engine {
     context: RenderContext,
     input: Input,
     render: RenderState,
+    queued_models: HashMap<ModelHandle, Instance>,
 }
 impl Engine {
     pub fn new(window: winit::window::Window) -> anyhow::Result<Self> {

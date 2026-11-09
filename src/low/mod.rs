@@ -1,8 +1,8 @@
+pub mod bindgroup;
 pub mod buffer;
 pub mod camera;
 pub mod context;
 pub mod instance;
-pub mod layout;
 pub mod light;
 pub mod material;
 pub mod mesh;

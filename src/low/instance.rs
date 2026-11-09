@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use wgpu::util::DeviceExt;
+use wgpu::util::{BufferInitDescriptor, DeviceExt};
 
 use glam::prelude::*;
 
@@ -95,17 +95,25 @@ impl InstanceRaw {
     }
 }
 #[derive(Debug, Clone, Copy)]
-pub struct MeshSliceInfo {
-    pub buffer_byte_offset: u32,
-    pub instance_count: u32,
+pub struct MeshRange {
+    pub first: u32,
+    pub count: u32,
+}
+impl MeshRange {
+    pub fn instance_range(&self) -> std::ops::Range<u32> {
+        self.first..(self.first + self.count)
+    }
 }
 pub struct StaticInstanceBuffer {
     buffer: wgpu::Buffer,
-    mesh_infos: HashMap<MeshHandle, MeshSliceInfo>,
+    ranges: HashMap<MeshHandle, MeshRange>,
 }
 impl StaticInstanceBuffer {
-    pub fn mesh_info(&self, mesh: MeshHandle) -> Option<MeshSliceInfo> {
-        self.mesh_infos.get(&mesh).copied()
+    pub fn mesh_range(&self, mesh: MeshHandle) -> Option<MeshRange> {
+        self.ranges.get(&mesh).copied()
+    }
+    pub fn mesh_ranges(&self) -> impl Iterator<Item = (MeshHandle, MeshRange)> {
+        self.ranges.iter().map(|(h, r)| (*h, *r))
     }
     pub fn buffer(&self) -> &wgpu::Buffer {
         &self.buffer
@@ -125,52 +133,39 @@ impl StaticInstanceMap {
         self.mesh_map.entry(mesh).or_default().push(instance_data);
     }
     pub fn bake(&self, device: &wgpu::Device) -> StaticInstanceBuffer {
-        const SLICE_ALIGN: usize = 256;
-        let mut mesh_infos = HashMap::new();
+        let mut ranges = HashMap::new();
 
-        let mut staging_bytes: Vec<u8> = Vec::new();
+        let mut staging: Vec<InstanceRaw> = Vec::new();
 
-        fill_staging(&mut staging_bytes, &mut mesh_infos, &self.mesh_map);
+        fill_staging(&mut staging, &mut ranges, &self.mesh_map);
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("static instance buffer"),
-            contents: &staging_bytes,
+            contents: bytemuck::cast_slice(&staging),
             usage: wgpu::BufferUsages::STORAGE,
         });
-        StaticInstanceBuffer { buffer, mesh_infos }
+        StaticInstanceBuffer { buffer, ranges }
     }
 }
 fn fill_staging(
-    staging_bytes: &mut Vec<u8>,
-    mesh_infos: &mut HashMap<MeshHandle, MeshSliceInfo>,
+    staging: &mut Vec<InstanceRaw>,
+    mesh_ranges: &mut HashMap<MeshHandle, MeshRange>,
     mesh_map: &HashMap<MeshHandle, Vec<Instance>>,
 ) {
-    const SLICE_ALIGN: usize = 256;
-
     for (mesh, instances) in mesh_map.iter() {
         if instances.is_empty() {
             continue;
         }
-        let current_offset = staging_bytes.len();
-        assert_eq!(current_offset % SLICE_ALIGN, 0);
-
+        let first = staging.len() as u32;
         // append raw instances to byte vector
         for inst in instances.iter().map(|i| i.to_raw()) {
-            staging_bytes.extend_from_slice(bytemuck::bytes_of(&inst));
+            staging.push(inst);
         }
 
-        // fill the difference between the alignment and the byte vector
-        // with 0's
-        let remainder = staging_bytes.len() % SLICE_ALIGN;
-        if remainder != 0 {
-            let padding = SLICE_ALIGN - remainder;
-            staging_bytes.resize(staging_bytes.len() + padding, 0);
-        }
-
-        mesh_infos.insert(
+        mesh_ranges.insert(
             *mesh,
-            MeshSliceInfo {
-                instance_count: instances.len() as u32,
-                buffer_byte_offset: current_offset as u32,
+            MeshRange {
+                first,
+                count: instances.len() as u32,
             },
         );
     }
@@ -178,31 +173,100 @@ fn fill_staging(
 
 pub struct DynamicInstanceMap {
     mesh_map: HashMap<MeshHandle, Vec<Instance>>,
-    mesh_info: HashMap<MeshHandle, MeshSliceInfo>,
-    staging_bytes: Vec<u8>,
+    ranges: HashMap<MeshHandle, MeshRange>,
+    staging: Vec<InstanceRaw>,
     buffer: Option<wgpu::Buffer>,
-    buffer_len: u32,
+    buffer_len: usize,
+    buffer_cap: usize,
+    // `true` if the buffer was recreated and the bind group
+    // needs to be redone
+    dirty: bool,
 }
 impl DynamicInstanceMap {
     pub fn new() -> Self {
         Self {
             buffer: None,
             buffer_len: 0,
+            buffer_cap: 0,
             mesh_map: HashMap::new(),
-            mesh_info: HashMap::new(),
-            staging_bytes: Vec::new(),
+            ranges: HashMap::new(),
+            staging: Vec::new(),
+            dirty: false,
         }
     }
     pub fn add_instance(&mut self, mesh: MeshHandle, instance: Instance) {
         self.mesh_map.entry(mesh).or_default().push(instance);
     }
     pub fn clear_instances(&mut self) {
-        self.mesh_map.clear();
+        for insts in self.mesh_map.values_mut() {
+            insts.clear();
+        }
     }
-    pub fn update_buffer(&mut self, queue: &wgpu::Queue, device: &wgpu::Device) {}
+    pub fn mesh_range(&self, mesh: MeshHandle) -> Option<MeshRange> {
+        self.ranges.get(&mesh).copied()
+    }
+    pub fn mesh_ranges(&self) -> impl Iterator<Item = (MeshHandle, MeshRange)> {
+        self.ranges.iter().map(|(h, r)| (*h, *r))
+    }
+    pub fn update_buffer(&mut self, queue: &wgpu::Queue, device: &wgpu::Device) {
+        // send instance map to staging buffer
+        self.staging.clear();
+        self.ranges.clear();
+        fill_staging(&mut self.staging, &mut self.ranges, &self.mesh_map);
+
+        let buf = self.buffer.take();
+        match buf {
+            // if the buffer wasn't created yet
+            None => {
+                // initial capacity: 64kb
+                let cap = self.staging.len().max(1 << 16);
+                let b = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("dynamic instance buffer"),
+                    mapped_at_creation: false,
+                    size: cap as u64,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                });
+                queue.write_buffer(&b, 0, bytemuck::cast_slice(&self.staging));
+                self.buffer = Some(b);
+                self.buffer_cap = cap;
+                self.buffer_len = self.staging.len();
+                self.dirty = true;
+            }
+            Some(b) => {
+                // if we have enough space
+                if self.buffer_cap >= self.staging.len() {
+                    queue.write_buffer(&b, 0, bytemuck::cast_slice(&self.staging));
+                    self.buffer = Some(b);
+                    self.buffer_len = self.staging.len();
+                } else {
+                    let cap = self.buffer_cap * 2;
+                    let b = device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("dynamic instance buffer"),
+                        mapped_at_creation: false,
+                        size: cap as u64,
+                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    });
+                    queue.write_buffer(&b, 0, bytemuck::cast_slice(&self.staging));
+                    self.buffer = Some(b);
+                    self.buffer_cap = cap;
+                    self.buffer_len = self.staging.len();
+                    self.dirty = true;
+                }
+            }
+        }
+    }
+
     pub fn buffer(&self) -> &wgpu::Buffer {
         self.buffer
             .as_ref()
             .expect("Buffer should be updated at least once before being retrieved")
+    }
+    /// `true` if the buffer was recreated and needs to be rebound
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+    /// clears the `dirty` bit. Call this after recreating the BindGroup.
+    pub fn clear_dirty(&mut self) {
+        self.dirty = false;
     }
 }
