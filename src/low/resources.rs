@@ -1,11 +1,13 @@
 use crate::low::bindgroup::{MaterialBindGroup, MaterialBindGroupLayout};
+use crate::low::buffer::Buffer;
 use crate::low::context::RenderContext;
-use crate::low::model;
+use crate::low::model::{self, ModelIndex, ModelVertex};
 use crate::low::texture::{CreateTextureArgs, Texture};
-use glam::{Vec2, Vec3};
-use std::io::{BufReader, Cursor};
+use anyhow::Context;
+use glam::{Mat4, Vec2, Vec3};
+use image::Rgba;
+use std::collections::HashMap;
 use std::path::PathBuf;
-use wgpu::util::DeviceExt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MeshHandle(usize);
@@ -19,18 +21,43 @@ pub struct MaterialHandle(usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModelHandle(usize);
 pub struct Mesh {
-    pub vertex_buffer: wgpu::Buffer,
-    pub index_buffer: wgpu::Buffer,
+    pub vertex_buffer: Buffer<[ModelVertex]>,
+    pub index_buffer: Buffer<[ModelIndex]>,
     pub num_elements: u32,
     pub material: MaterialHandle,
 }
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub enum AlphaMode {
+    Opaque,
+    Mask { cutoff: f32 },
+    Blend,
+}
 pub struct Material {
-    pub diffuse: TextureHandle,
-    pub normal: TextureHandle,
+    pub base_color: image::Rgba<f32>,
+    pub base_color_texture: TextureHandle,
+    pub normal_texture: TextureHandle,
+    pub metallic: f32,
+    pub roughness: f32,
+    pub alpha_mode: AlphaMode,
     pub bind_group: MaterialBindGroup,
 }
 pub struct Model {
-    pub meshes: Vec<MeshHandle>,
+    pub nodes: Vec<Node>,
+    pub roots: Vec<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub enum NodeKind {
+    Mesh(Vec<MeshHandle>),
+    Collider,
+    Empty,
+}
+pub struct Node {
+    pub name: String,
+    pub parent: Option<usize>,
+    pub children: Vec<usize>,
+    pub local: Mat4, // relative from parent, straight from GLTF
+    pub kind: NodeKind,
 }
 
 pub struct ResourceManager {
@@ -40,19 +67,58 @@ pub struct ResourceManager {
     meshes: Vec<Mesh>,
     models: Vec<Model>,
     res_path: PathBuf,
+    default_base_texture: TextureHandle,
+    default_normal_texture: TextureHandle,
+    default_material: MaterialHandle,
 }
 impl ResourceManager {
-    pub fn new(device: &wgpu::Device, resources_path: &str) -> Self {
+    pub fn new(ctx: &RenderContext, resources_path: &str) -> anyhow::Result<Self> {
         let p = PathBuf::from(resources_path);
         assert!(p.is_dir(), "resources path must be a directory");
-        Self {
+        let mut out = Self {
             textures: Vec::new(),
             materials: Vec::new(),
-            material_bind_group_layout: MaterialBindGroupLayout::new(device),
+            material_bind_group_layout: MaterialBindGroupLayout::new(&ctx.device),
             models: Vec::new(),
             meshes: Vec::new(),
             res_path: p,
-        }
+            // we'll set these after
+            default_base_texture: TextureHandle(0),
+            default_normal_texture: TextureHandle(0),
+            default_material: MaterialHandle(0),
+        };
+        out.default_base_texture =
+            out.create_color_texture(ctx, image::Rgb([255, 255, 255]), Texture::DEFAULT_ARGS)?;
+        out.default_normal_texture =
+            out.create_color_texture(ctx, image::Rgb([128, 128, 255]), Texture::NORMAL_ARGS)?;
+        out.create_default_material(ctx);
+        Ok(out)
+    }
+    fn create_color_texture(
+        &mut self,
+        ctx: &RenderContext,
+        color: image::Rgb<u8>,
+        args: CreateTextureArgs,
+    ) -> anyhow::Result<TextureHandle> {
+        let img = image::ImageBuffer::from_pixel(1, 1, color);
+        let txt = Texture::from_image(ctx, &img.into(), args, None)?;
+        Ok(self.add_texture(txt))
+    }
+    fn create_default_material(&mut self, ctx: &RenderContext) -> MaterialHandle {
+        self.add_material(Material {
+            base_color: Rgba([1., 1., 1., 1.]),
+            base_color_texture: self.default_base_texture,
+            normal_texture: self.default_normal_texture,
+            metallic: 0.0,
+            roughness: 1.0,
+            alpha_mode: AlphaMode::Opaque,
+            bind_group: MaterialBindGroup::new(
+                &ctx.device,
+                &self.material_bind_group_layout,
+                self.get_texture(self.default_base_texture),
+                self.get_texture(self.default_normal_texture),
+            ),
+        })
     }
     /// Adds an already created texture to the manager
     fn add_texture(&mut self, texture: Texture) -> TextureHandle {
@@ -99,127 +165,195 @@ impl ResourceManager {
         let txt = Texture::from_bytes(ctx, &bytes, args, Some(filename))?;
         Ok(self.add_texture(txt))
     }
+    fn gltf_primitive2mesh(
+        &self,
+        ctx: &RenderContext,
+        materials: &HashMap<usize, MaterialHandle>,
+        buffers: &[gltf::buffer::Data],
+        primitive: gltf::Primitive,
+    ) -> anyhow::Result<Mesh> {
+        let mat = primitive
+            .material()
+            .index()
+            .map(|i| materials[&i])
+            .unwrap_or(self.default_material);
 
-    /// Loads a model from a .obj file. Group and object diretives are both treated
-    /// as meshes of a single object.
-    pub fn load_obj_model(
+        let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
+
+        let mut vertices = Vec::new();
+        // read indices
+        let indices: Vec<_> = reader
+            .read_indices()
+            .context("GLTF mesh without indices")?
+            .into_u32()
+            .map(|i| ModelIndex(i))
+            .collect();
+
+        let positions = reader
+            .read_positions()
+            .context("GLTF mesh without vertex positions")?;
+        let normals = reader
+            .read_normals()
+            .context("GLTF mesh without vertex normals")?;
+
+        let tex_coords = reader.read_tex_coords(0);
+
+        // 1. Read vertex positions ([f32; 3])
+        for pos in positions {
+            vertices.push(ModelVertex {
+                position: pos,
+                tex_coords: [0.; 2],
+                normal: [0.; 3],
+                // we'll build these later
+                tangent: [0.; 3],
+                bitangent: [0.; 3],
+            });
+        }
+
+        for (i, norm) in normals.enumerate() {
+            vertices[i].normal = norm;
+        }
+
+        if let Some(tex_coords) = tex_coords {
+            for (i, uv) in tex_coords.into_f32().enumerate() {
+                vertices[i].tex_coords = uv;
+            }
+        }
+        build_normal_space(&mut vertices, &indices);
+        Ok(Mesh {
+            vertex_buffer: Buffer::new(&ctx.device, &vertices),
+            index_buffer: Buffer::new(&ctx.device, &indices),
+            material: mat,
+            num_elements: indices.len() as u32,
+        })
+    }
+    fn visit_glb_node(
+        &mut self,
+        ctx: &RenderContext,
+        node: gltf::Node,
+        model_nodes: &mut Vec<Node>,
+        parent: Option<usize>,
+        materials: &HashMap<usize, MaterialHandle>,
+        buffers: &[gltf::buffer::Data],
+    ) -> anyhow::Result<usize> {
+        let mut meshes = Vec::new();
+        // a GLTF primitive is our mesh, and a gltf mesh is our model
+        for primitive in node.mesh().unwrap().primitives() {
+            meshes
+                .push(self.add_mesh(self.gltf_primitive2mesh(ctx, materials, buffers, primitive)?));
+        }
+        let node_index = model_nodes.len();
+        let node_name = node
+            .name()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("node_{node_index}"));
+
+        model_nodes.push(Node {
+            name: node_name,
+            parent,
+            children: Vec::new(),
+            local: glam::Mat4::from_cols_array_2d(&node.transform().matrix()),
+            kind: NodeKind::Mesh(meshes),
+        });
+
+        for child in node.children() {
+            let child_idx = self.visit_glb_node(
+                ctx,
+                child,
+                model_nodes,
+                Some(node_index),
+                materials,
+                buffers,
+            )?;
+            model_nodes[node_index].children.push(child_idx);
+        }
+        Ok(node_index)
+    }
+
+    pub fn load_glb_model(
         &mut self,
         ctx: &RenderContext,
         filename: &str,
     ) -> anyhow::Result<ModelHandle> {
-        let obj_text = std::fs::read_to_string(filename)?;
-        let obj_cursor = Cursor::new(obj_text);
-        let mut obj_reader = BufReader::new(obj_cursor);
+        let (document, buffers, images) = gltf::import(self.res_path.join(filename))?;
+        let scene = document
+            .default_scene()
+            .context(".glb file missing default scene")?;
 
-        let (models, obj_materials) =
-            tobj::load_obj_buf(&mut obj_reader, &tobj::GPU_LOAD_OPTIONS, |p| {
-                let res_path = self.res_path.join(p);
-                let mat_text = std::fs::read_to_string(res_path)
-                    .map_err(|_| tobj::LoadError::OpenFileFailed)?;
-                tobj::load_mtl_buf(&mut BufReader::new(Cursor::new(mat_text)))
-            })?;
-        let obj_materials = obj_materials?;
-        let mut materials = Vec::new();
-        for material in obj_materials {
-            anyhow::ensure!(
-                material.diffuse_texture.is_some(),
-                "Materials must have a diffuse texture"
-            );
-            let diffuse_file = material.diffuse_texture.unwrap();
-            let normal_file = material.normal_texture;
-            let diffuse_texture = self.load_texture(ctx, &diffuse_file, Texture::DEFAULT_ARGS)?;
+        let mut materials = HashMap::new();
 
-            // if there isn't a normal file, we'll create a normal "flat" texture
-            let normal_texture = match normal_file {
-                Some(f) => self.load_texture(ctx, &f, Texture::NORMAL_ARGS)?,
-                None => {
-                    let diffuse_size = self.textures[diffuse_texture.0].texture.size();
-                    // a flat normal texture has all normal vectors as unit Z.
-                    // X: -1 to +1 :  Red:     0 to 255
-                    //Y: -1 to +1 :  Green:   0 to 255
-                    //Z:  0 to -1 :  Blue:  128 to 255
-                    // to have XYZ = (0, 0, -1) (pointing towards the viewer),
-                    // we have RGB = (128, 128, 255)
-                    let normal = image::Rgb([128_u8, 128_u8, 255_u8]);
-                    let img = image::ImageBuffer::from_pixel(
-                        diffuse_size.width,
-                        diffuse_size.height,
-                        normal,
-                    );
-                    let txt = Texture::from_image(ctx, &img.into(), Texture::NORMAL_ARGS, None)?;
-                    self.add_texture(txt)
+        for material in document.materials() {
+            let pbr = material.pbr_metallic_roughness();
+            let base_color_texture = match pbr.base_color_texture() {
+                None => self.default_base_texture,
+                Some(t) => {
+                    let texture = t.texture();
+                    let im = &images[texture.source().index()];
+                    let img = create_img_from_gltf(im);
+                    self.add_texture(Texture::from_image(ctx, &img, Texture::DEFAULT_ARGS, None)?)
                 }
             };
-            let bind_group = MaterialBindGroup::new(
-                &ctx.device,
-                &self.material_bind_group_layout,
-                &self.textures[diffuse_texture.0],
-                &self.textures[normal_texture.0],
-            );
-            materials.push(self.add_material(Material {
-                diffuse: diffuse_texture,
-                normal: normal_texture,
-                bind_group,
-            }));
+            let normal_texture = match material.normal_texture() {
+                None => self.default_normal_texture,
+                Some(t) => {
+                    let texture = t.texture();
+                    let im = &images[texture.source().index()];
+                    let img = create_img_from_gltf(im);
+                    self.add_texture(Texture::from_image(ctx, &img, Texture::NORMAL_ARGS, None)?)
+                }
+            };
+            let alpha_mode = match material.alpha_mode() {
+                gltf::material::AlphaMode::Blend => AlphaMode::Blend,
+                gltf::material::AlphaMode::Opaque => AlphaMode::Opaque,
+                gltf::material::AlphaMode::Mask => AlphaMode::Mask {
+                    cutoff: material.alpha_cutoff().unwrap(),
+                },
+            };
+            let mat = Material {
+                base_color: image::Rgba(pbr.base_color_factor()),
+                base_color_texture,
+                normal_texture,
+                metallic: pbr.metallic_factor(),
+                roughness: pbr.roughness_factor(),
+                alpha_mode,
+                bind_group: MaterialBindGroup::new(
+                    &ctx.device,
+                    &self.material_bind_group_layout,
+                    self.get_texture(base_color_texture),
+                    self.get_texture(normal_texture),
+                ),
+            };
+            materials.insert(material.index().unwrap(), self.add_material(mat));
         }
-        let meshes = models
-            .into_iter()
-            .map(|m| {
-                let mut vertices = (0..m.mesh.positions.len() / 3)
-                    .map(|i| model::ModelVertex {
-                        position: [
-                            m.mesh.positions[i * 3],
-                            m.mesh.positions[i * 3 + 1],
-                            m.mesh.positions[i * 3 + 2],
-                        ],
-                        tex_coords: [m.mesh.texcoords[i * 2], 1.0 - m.mesh.texcoords[i * 2 + 1]],
-                        normal: [
-                            m.mesh.normals[i * 3],
-                            m.mesh.normals[i * 3 + 1],
-                            m.mesh.normals[i * 3 + 2],
-                        ],
-                        // we'll calculate these later
-                        tangent: [0.; 3],
-                        bitangent: [0.; 3],
-                    })
-                    .collect::<Vec<_>>();
-
-                build_normal_space(&mut vertices, &m.mesh.indices);
-
-                let vertex_buffer =
-                    ctx.device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some(&format!("{:?} Vertex Buffer", filename)),
-                            contents: bytemuck::cast_slice(&vertices),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        });
-                let index_buffer =
-                    ctx.device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some(&format!("{:?} Index Buffer", filename)),
-                            contents: bytemuck::cast_slice(&m.mesh.indices),
-                            usage: wgpu::BufferUsages::INDEX,
-                        });
-
-                self.add_mesh(Mesh {
-                    vertex_buffer,
-                    index_buffer,
-                    num_elements: m.mesh.indices.len() as u32,
-                    material: materials[m.mesh.material_id.unwrap_or(0)],
-                })
-            })
-            .collect::<Vec<_>>();
-        self.models.push(Model { meshes });
-        Ok(ModelHandle(self.models.len() - 1))
+        let mut model = Model {
+            nodes: Vec::new(),
+            roots: Vec::new(),
+        };
+        for node in scene.nodes() {
+            model.roots.push(self.visit_glb_node(
+                ctx,
+                node,
+                &mut model.nodes,
+                None,
+                &materials,
+                &buffers,
+            )?);
+        }
+        let idx = self.models.len();
+        self.models.push(model);
+        Ok(ModelHandle(idx))
     }
 }
 
-fn build_normal_space(vertices: &mut [model::ModelVertex], indices: &[u32]) {
+fn build_normal_space(vertices: &mut [model::ModelVertex], indices: &[ModelIndex]) {
     let mut triangles_included = vec![0; vertices.len()];
     for c in indices.chunks(3) {
-        let v0 = vertices[c[0] as usize];
-        let v1 = vertices[c[1] as usize];
-        let v2 = vertices[c[2] as usize];
+        let c0 = c[0].0 as usize;
+        let c1 = c[1].0 as usize;
+        let c2 = c[2].0 as usize;
+        let v0 = vertices[c0];
+        let v1 = vertices[c1];
+        let v2 = vertices[c2];
 
         let pos0: Vec3 = v0.position.into();
         let pos1: Vec3 = v1.position.into();
@@ -243,23 +377,17 @@ fn build_normal_space(vertices: &mut [model::ModelVertex], indices: &[u32]) {
         // maps with wgpu texture coordinate system
         let bitangent = (delta_pos2 * delta_uv1.x - delta_pos1 * delta_uv2.x) * -r;
 
-        vertices[c[0] as usize].tangent =
-            (tangent + Vec3::from(vertices[c[0] as usize].tangent)).into();
-        vertices[c[1] as usize].tangent =
-            (tangent + Vec3::from(vertices[c[1] as usize].tangent)).into();
-        vertices[c[2] as usize].tangent =
-            (tangent + Vec3::from(vertices[c[2] as usize].tangent)).into();
-        vertices[c[0] as usize].bitangent =
-            (bitangent + Vec3::from(vertices[c[0] as usize].bitangent)).into();
-        vertices[c[1] as usize].bitangent =
-            (bitangent + Vec3::from(vertices[c[1] as usize].bitangent)).into();
-        vertices[c[2] as usize].bitangent =
-            (bitangent + Vec3::from(vertices[c[2] as usize].bitangent)).into();
+        vertices[c0].tangent = (tangent + Vec3::from(vertices[c0].tangent)).into();
+        vertices[c1].tangent = (tangent + Vec3::from(vertices[c1].tangent)).into();
+        vertices[c2].tangent = (tangent + Vec3::from(vertices[c2].tangent)).into();
+        vertices[c0].bitangent = (bitangent + Vec3::from(vertices[c0].bitangent)).into();
+        vertices[c1].bitangent = (bitangent + Vec3::from(vertices[c1].bitangent)).into();
+        vertices[c2].bitangent = (bitangent + Vec3::from(vertices[c2].bitangent)).into();
 
         // used to average the tangents/bitangents
-        triangles_included[c[0] as usize] += 1;
-        triangles_included[c[1] as usize] += 1;
-        triangles_included[c[2] as usize] += 1;
+        triangles_included[c0] += 1;
+        triangles_included[c1] += 1;
+        triangles_included[c2] += 1;
     }
 
     // average the tangents/bitangents
@@ -268,5 +396,43 @@ fn build_normal_space(vertices: &mut [model::ModelVertex], indices: &[u32]) {
         let v = &mut vertices[i];
         v.tangent = (Vec3::from(v.tangent) * denom).into();
         v.bitangent = (Vec3::from(v.bitangent) * denom).into();
+    }
+}
+
+use image::{DynamicImage, ImageBuffer};
+fn create_img_from_gltf(im: &gltf::image::Data) -> DynamicImage {
+    use gltf::image::Format as GltfFmt;
+    match im.format {
+        GltfFmt::R8G8B8 => image::DynamicImage::ImageRgb8(
+            ImageBuffer::from_raw(im.width, im.height, im.pixels.clone()).unwrap(),
+        ),
+        GltfFmt::R8G8B8A8 => image::DynamicImage::ImageRgba8(
+            ImageBuffer::from_raw(im.width, im.height, im.pixels.clone()).unwrap(),
+        ),
+        GltfFmt::R16G16B16 => {
+            let pixels: Vec<u16> = bytemuck::cast_slice(&im.pixels).to_vec();
+            image::DynamicImage::ImageRgb16(
+                ImageBuffer::from_raw(im.width, im.height, pixels).unwrap(),
+            )
+        }
+        GltfFmt::R16G16B16A16 => {
+            let pixels: Vec<u16> = bytemuck::cast_slice(&im.pixels).to_vec();
+            image::DynamicImage::ImageRgba16(
+                ImageBuffer::from_raw(im.width, im.height, pixels).unwrap(),
+            )
+        }
+        GltfFmt::R32G32B32FLOAT => {
+            let pixels: Vec<f32> = bytemuck::cast_slice(&im.pixels).to_vec();
+            image::DynamicImage::ImageRgb32F(
+                ImageBuffer::from_raw(im.width, im.height, pixels).unwrap(),
+            )
+        }
+        GltfFmt::R32G32B32A32FLOAT => {
+            let pixels: Vec<f32> = bytemuck::cast_slice(&im.pixels).to_vec();
+            image::DynamicImage::ImageRgba32F(
+                ImageBuffer::from_raw(im.width, im.height, pixels).unwrap(),
+            )
+        }
+        _ => unimplemented!("invalid texture image format"),
     }
 }

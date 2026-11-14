@@ -2,7 +2,10 @@ use std::marker::PhantomData;
 
 use wgpu::util::DeviceExt;
 
-use crate::low::uniform::{CameraUniform, LightsUniform};
+use crate::low::{
+    model::{ModelIndex, ModelVertex},
+    uniform::{CameraUniform, LightsUniform},
+};
 
 pub trait Bufferable {
     fn label(&self) -> Option<&str>;
@@ -54,5 +57,29 @@ impl Bufferable for LightsUniform {
     }
     fn usage(&self) -> wgpu::BufferUsages {
         wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST
+    }
+}
+
+impl Bufferable for [ModelVertex] {
+    fn label(&self) -> Option<&str> {
+        Some("Model vertex buffer")
+    }
+    fn contents(&self) -> &[u8] {
+        bytemuck::cast_slice(self)
+    }
+    fn usage(&self) -> wgpu::BufferUsages {
+        wgpu::BufferUsages::VERTEX
+    }
+}
+
+impl Bufferable for [ModelIndex] {
+    fn label(&self) -> Option<&str> {
+        Some("Model index buffer")
+    }
+    fn contents(&self) -> &[u8] {
+        bytemuck::cast_slice(self)
+    }
+    fn usage(&self) -> wgpu::BufferUsages {
+        wgpu::BufferUsages::INDEX
     }
 }

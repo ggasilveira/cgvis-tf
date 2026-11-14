@@ -15,6 +15,11 @@ pub struct ModelVertex {
     pub bitangent: [f32; 3],
 }
 
+/// Indices for index buffers
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ModelIndex(pub u32);
+
 impl Vertex for ModelVertex {
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         use std::mem;
