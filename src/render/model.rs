@@ -1,4 +1,4 @@
-use crate::low::texture;
+use crate::render::texture;
 use std::ops::Range;
 
 pub trait Vertex {

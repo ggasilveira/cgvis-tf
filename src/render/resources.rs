@@ -1,8 +1,8 @@
-use crate::low::bindgroup::{MaterialBindGroup, MaterialBindGroupLayout};
-use crate::low::buffer::Buffer;
-use crate::low::context::RenderContext;
-use crate::low::model::{self, ModelIndex, ModelVertex};
-use crate::low::texture::{CreateTextureArgs, Texture};
+use crate::render::bindgroup::{MaterialBindGroup, MaterialBindGroupLayout};
+use crate::render::buffer::Buffer;
+use crate::render::context::RenderContext;
+use crate::render::model::{self, ModelIndex, ModelVertex};
+use crate::render::texture::{CreateTextureArgs, Texture};
 use anyhow::Context;
 use glam::{Mat4, Vec2, Vec3};
 use image::Rgba;

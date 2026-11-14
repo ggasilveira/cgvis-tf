@@ -1,14 +1,14 @@
-use crate::low::bindgroup::{
+use crate::render::bindgroup::{
     GlobalBindGroup, GlobalBindGroupLayout, MaterialBindGroup, MaterialBindGroupLayout,
 };
-use crate::low::buffer::Buffer;
-use crate::low::camera::Camera;
-use crate::low::context::RenderContext;
-use crate::low::instance::*;
-use crate::low::model;
-use crate::low::resources::ResourceManager;
-use crate::low::texture;
-use crate::low::uniform::{CameraUniform, LightsUniform};
+use crate::render::buffer::Buffer;
+use crate::render::camera::Camera;
+use crate::render::context::RenderContext;
+use crate::render::instance::*;
+use crate::render::model;
+use crate::render::resources::ResourceManager;
+use crate::render::texture;
+use crate::render::uniform::{CameraUniform, LightsUniform};
 use model::Vertex;
 
 struct RenderPipelineLayout {
@@ -103,7 +103,7 @@ pub struct RenderState {
     lights_buffer: Buffer<LightsUniform>,
     static_global_bg: GlobalBindGroup,
     dynamic_global_bg: GlobalBindGroup,
-    dyn_instance_map: DynamicInstanceMap,
+    dyn_instance_map: InstanceMap,
     static_instance_buffer: StaticInstanceBuffer,
     global_bind_group_layout: GlobalBindGroupLayout,
     material_bind_group_layout: MaterialBindGroupLayout,
@@ -127,7 +127,7 @@ impl RenderState {
 
         let material_bind_group_layout = MaterialBindGroupLayout::new(&context.device);
         let global_bind_group_layout = GlobalBindGroupLayout::new(&context.device);
-        let dyn_instance_map = DynamicInstanceMap::new();
+        let dyn_instance_map = InstanceMap::new();
         let static_instance_buffer = StaticInstanceMap::new().bake(&context.device);
         let static_global_bg = GlobalBindGroup::new_static(
             &context.device,
@@ -193,7 +193,7 @@ impl RenderState {
     pub fn update_cam_uniform(&mut self, context: &RenderContext, cam_uniform: CameraUniform) {
         self.camera_buffer.update(&context.queue, &cam_uniform);
     }
-    pub fn dyn_instance_map(&mut self) -> &mut DynamicInstanceMap {
+    pub fn dyn_instance_map(&mut self) -> &mut InstanceMap {
         &mut self.dyn_instance_map
     }
     pub fn set_static_instance_buffer(

@@ -1,5 +1,5 @@
-use crate::low::camera::Camera;
-use crate::low::light::{DirectionalLight, Light, PointLight, SpotLight};
+use crate::render::camera::Camera;
+use crate::render::light::{DirectionalLight, Light, PointLight, SpotLight};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

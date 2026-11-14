@@ -1,6 +1,6 @@
-use crate::low::instance::{DynamicInstanceMap, StaticInstanceBuffer};
-use crate::low::uniform::{CameraUniform, LightsUniform};
-use crate::low::{buffer::Buffer, texture::Texture};
+use crate::render::instance::{InstanceMap, StaticInstanceBuffer};
+use crate::render::uniform::{CameraUniform, LightsUniform};
+use crate::render::{buffer::Buffer, texture::Texture};
 
 /// Bind group layout that gets updated once per material/mesh.
 /// group(1).
@@ -211,7 +211,7 @@ impl GlobalBindGroup {
         layout: &GlobalBindGroupLayout,
         camera_buffer: &Buffer<CameraUniform>,
         lights_buffer: &Buffer<LightsUniform>,
-        dyn_instance_map: &DynamicInstanceMap,
+        dyn_instance_map: &InstanceMap,
     ) -> Self {
         Self::new_raw(
             device,

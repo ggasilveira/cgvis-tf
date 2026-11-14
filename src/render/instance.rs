@@ -1,20 +1,25 @@
+use crate::{
+    math::Transform,
+    render::resources::{NodeKind, ResourceManager},
+};
 use std::collections::HashMap;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 
 use glam::prelude::*;
 
-use crate::low::{buffer::Buffer, resources::MeshHandle};
+use crate::render::{
+    buffer::Buffer,
+    resources::{MeshHandle, ModelHandle},
+};
 
 #[derive(Debug, Clone)]
 pub struct Instance {
-    pub position: Vec3,
-    pub scale: Vec3,
-    pub rotation: Quat,
+    pub model: ModelHandle,
+    pub transform: Transform,
 }
 impl Instance {
     fn to_raw(&self) -> InstanceRaw {
-        let model =
-            glam::Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position);
+        let model = self.transform.mat4();
         let normal = glam::Mat3::from_mat4(model).inverse().transpose();
         let normal_padded = [
             normal.x_axis.extend(0.).to_array(),
@@ -42,7 +47,7 @@ struct InstanceRaw {
     normal: [[f32; 4]; 3],
 }
 impl InstanceRaw {
-    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+    pub fn _desc() -> wgpu::VertexBufferLayout<'static> {
         use std::mem;
         wgpu::VertexBufferLayout {
             array_stride: mem::size_of::<InstanceRaw>() as wgpu::BufferAddress,
@@ -104,54 +109,22 @@ impl MeshRange {
         self.first..(self.first + self.count)
     }
 }
-pub struct StaticInstanceBuffer {
-    buffer: wgpu::Buffer,
-    ranges: HashMap<MeshHandle, MeshRange>,
-}
-impl StaticInstanceBuffer {
-    pub fn mesh_range(&self, mesh: MeshHandle) -> Option<MeshRange> {
-        self.ranges.get(&mesh).copied()
-    }
-    pub fn mesh_ranges(&self) -> impl Iterator<Item = (MeshHandle, MeshRange)> {
-        self.ranges.iter().map(|(h, r)| (*h, *r))
-    }
-    pub fn buffer(&self) -> &wgpu::Buffer {
-        &self.buffer
-    }
-}
-
-pub struct StaticInstanceMap {
-    mesh_map: HashMap<MeshHandle, Vec<Instance>>,
-}
-impl StaticInstanceMap {
-    pub fn new() -> Self {
-        Self {
-            mesh_map: HashMap::new(),
-        }
-    }
-    pub fn add_instance(&mut self, mesh: MeshHandle, instance_data: Instance) {
-        self.mesh_map.entry(mesh).or_default().push(instance_data);
-    }
-    pub fn bake(&self, device: &wgpu::Device) -> StaticInstanceBuffer {
-        let mut ranges = HashMap::new();
-
-        let mut staging: Vec<InstanceRaw> = Vec::new();
-
-        fill_staging(&mut staging, &mut ranges, &self.mesh_map);
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("static instance buffer"),
-            contents: bytemuck::cast_slice(&staging),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-        StaticInstanceBuffer { buffer, ranges }
-    }
-}
 fn fill_staging(
+    resources: &ResourceManager,
     staging: &mut Vec<InstanceRaw>,
     mesh_ranges: &mut HashMap<MeshHandle, MeshRange>,
-    mesh_map: &HashMap<MeshHandle, Vec<Instance>>,
+    model_map: &HashMap<ModelHandle, Vec<Instance>>,
 ) {
-    for (mesh, instances) in mesh_map.iter() {
+    for (model, instances) in model_map.iter() {
+        let model = resources.get_model(*model);
+        for node in model.nodes.iter() {
+            if let NodeKind::Mesh(meshes) = node.kind {
+                let world = 
+                for &mesh in meshes.iter() {
+
+                }
+            }
+        }
         if instances.is_empty() {
             continue;
         }
@@ -162,7 +135,7 @@ fn fill_staging(
         }
 
         mesh_ranges.insert(
-            *mesh,
+            *model,
             MeshRange {
                 first,
                 count: instances.len() as u32,
@@ -171,8 +144,8 @@ fn fill_staging(
     }
 }
 
-pub struct DynamicInstanceMap {
-    mesh_map: HashMap<MeshHandle, Vec<Instance>>,
+pub struct InstanceMap {
+    model_map: HashMap<ModelHandle, Vec<Instance>>,
     ranges: HashMap<MeshHandle, MeshRange>,
     staging: Vec<InstanceRaw>,
     buffer: Option<wgpu::Buffer>,
@@ -182,23 +155,23 @@ pub struct DynamicInstanceMap {
     // needs to be redone
     dirty: bool,
 }
-impl DynamicInstanceMap {
+impl InstanceMap {
     pub fn new() -> Self {
         Self {
             buffer: None,
             buffer_len: 0,
             buffer_cap: 0,
-            mesh_map: HashMap::new(),
+            model_map: HashMap::new(),
             ranges: HashMap::new(),
             staging: Vec::new(),
             dirty: false,
         }
     }
-    pub fn add_instance(&mut self, mesh: MeshHandle, instance: Instance) {
-        self.mesh_map.entry(mesh).or_default().push(instance);
+    pub fn add_instance(&mut self, instance: Instance) {
+        self.model_map.entry(instance.model).or_default().push(instance);
     }
     pub fn clear_instances(&mut self) {
-        for insts in self.mesh_map.values_mut() {
+        for insts in self.model_map.values_mut() {
             insts.clear();
         }
     }
@@ -212,7 +185,7 @@ impl DynamicInstanceMap {
         // send instance map to staging buffer
         self.staging.clear();
         self.ranges.clear();
-        fill_staging(&mut self.staging, &mut self.ranges, &self.mesh_map);
+        fill_staging(&mut self.staging, &mut self.ranges, &self.model_map);
 
         let buf = self.buffer.take();
         match buf {

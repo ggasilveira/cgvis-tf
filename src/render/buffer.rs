@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use wgpu::util::DeviceExt;
 
-use crate::low::{
+use crate::render::{
     model::{ModelIndex, ModelVertex},
     uniform::{CameraUniform, LightsUniform},
 };
