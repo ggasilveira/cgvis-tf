@@ -1,16 +1,12 @@
 use crate::{
     math::Transform,
-    render::resources::{NodeKind, ResourceManager},
+    render::{
+        bindgroup::{InstanceBufferBindGroup, InstanceBufferBindGroupLayout},
+        resources::{NodeKind, ResourceManager},
+    },
 };
-use std::collections::HashMap;
-use wgpu::util::{BufferInitDescriptor, DeviceExt};
 
-use glam::prelude::*;
-
-use crate::render::{
-    buffer::Buffer,
-    resources::{MeshHandle, ModelHandle},
-};
+use crate::render::resources::{MaterialHandle, MeshHandle, ModelHandle};
 
 #[derive(Debug, Clone)]
 pub struct Instance {
@@ -18,7 +14,7 @@ pub struct Instance {
     pub transform: Transform,
 }
 impl Instance {
-    fn to_raw(&self) -> InstanceRaw {
+    fn to_raw(&self) -> InstanceData {
         let model = self.transform.mat4();
         let normal = glam::Mat3::from_mat4(model).inverse().transpose();
         let normal_padded = [
@@ -26,220 +22,226 @@ impl Instance {
             normal.y_axis.extend(0.).to_array(),
             normal.z_axis.extend(0.).to_array(),
         ];
-        InstanceRaw {
+        InstanceData {
             model: model.to_cols_array_2d(),
             normal: normal_padded,
         }
     }
 }
 
-/// This structure represents the `InstanceInput` in the shader
-/// ```wgsl
-/// struct InstaceInput {
-///     model: mat4x4<f32>,
-///     normal: mat3x3<f32>,
-/// }
-///```
+use glam::{Mat3, Mat4};
+
+// ---------------------------------------------------------------------------
+// Per-entry GPU data. Layout matches the WGSL struct at the bottom.
+// mat3x3 in WGSL has 16-byte columns, so the normal matrix is 3 padded vec4s.
+// ---------------------------------------------------------------------------
 #[repr(C)]
-#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct InstanceRaw {
-    model: [[f32; 4]; 4],
-    normal: [[f32; 4]; 3],
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct InstanceData {
+    pub model: [[f32; 4]; 4],
+    pub normal: [[f32; 4]; 3],
 }
-impl InstanceRaw {
-    pub fn _desc() -> wgpu::VertexBufferLayout<'static> {
-        use std::mem;
-        wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<InstanceRaw>() as wgpu::BufferAddress,
-            // We need to switch from using a step mode of Vertex to Instance
-            // This means that our shaders will only change to use the next
-            // instance when the shader starts processing a new instance
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &[
-                // A mat4 takes up 4 vertex slots as it is technically 4 vec4s. We need to define a slot
-                // for each vec4. We'll have to reassemble the mat4 in the shader.
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    // While our vertex shader only uses locations 0, and 1 now, in later tutorials, we'll
-                    // be using 2, 3, and 4, for Vertex. We'll start at slot 5, not conflict with them later
-                    shader_location: 5,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
-                    shader_location: 6,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 8]>() as wgpu::BufferAddress,
-                    shader_location: 7,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 12]>() as wgpu::BufferAddress,
-                    shader_location: 8,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 16]>() as wgpu::BufferAddress,
-                    shader_location: 9,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 19]>() as wgpu::BufferAddress,
-                    shader_location: 10,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 22]>() as wgpu::BufferAddress,
-                    shader_location: 11,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-            ],
+impl InstanceData {
+    pub fn new(world: Mat4) -> Self {
+        let n = Mat3::from_mat4(world).inverse().transpose();
+        let c = |v: glam::Vec3| [v.x, v.y, v.z, 0.0];
+        Self {
+            model: world.to_cols_array_2d(),
+            normal: [c(n.x_axis), c(n.y_axis), c(n.z_axis)],
         }
     }
 }
-#[derive(Debug, Clone, Copy)]
-pub struct MeshRange {
+
+/// One draw call: `draw_indexed(.., 0, first..first + count)` for this mesh.
+#[derive(Clone, Copy, Debug)]
+pub struct Batch {
+    pub material: MaterialHandle,
+    pub mesh: MeshHandle,
     pub first: u32,
     pub count: u32,
 }
-impl MeshRange {
-    pub fn instance_range(&self) -> std::ops::Range<u32> {
-        self.first..(self.first + self.count)
-    }
-}
-fn fill_staging(
-    resources: &ResourceManager,
-    staging: &mut Vec<InstanceRaw>,
-    mesh_ranges: &mut HashMap<MeshHandle, MeshRange>,
-    model_map: &HashMap<ModelHandle, Vec<Instance>>,
-) {
-    for (model, instances) in model_map.iter() {
-        let model = resources.get_model(*model);
-        for node in model.nodes.iter() {
-            if let NodeKind::Mesh(meshes) = node.kind {
-                let world = 
-                for &mesh in meshes.iter() {
 
-                }
-            }
-        }
-        if instances.is_empty() {
-            continue;
-        }
-        let first = staging.len() as u32;
-        // append raw instances to byte vector
-        for inst in instances.iter().map(|i| i.to_raw()) {
-            staging.push(inst);
-        }
-
-        mesh_ranges.insert(
-            *model,
-            MeshRange {
-                first,
-                count: instances.len() as u32,
-            },
-        );
-    }
+/// One thing to draw, produced by walking instances and their model nodes.
+pub struct DrawItem {
+    pub material: MaterialHandle,
+    pub mesh: MeshHandle,
+    pub world: Mat4,
 }
 
-pub struct InstanceMap {
-    model_map: HashMap<ModelHandle, Vec<Instance>>,
-    ranges: HashMap<MeshHandle, MeshRange>,
-    staging: Vec<InstanceRaw>,
-    buffer: Option<wgpu::Buffer>,
-    buffer_len: usize,
-    buffer_cap: usize,
-    // `true` if the buffer was recreated and the bind group
-    // needs to be redone
+/// Global instance buffer: one GPU storage buffer holding the transform of every
+/// drawn (instance, mesh) pair, sorted so each mesh's entries are contiguous.
+/// `batches` is the "map": mesh -> range of entries to draw.
+///
+/// Assumes glam for math, and handles that are Copy + Ord newtypes over an index:
+///     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+///     pub struct MeshHandle(pub u32);
+pub struct InstanceBuffer {
+    buffer: wgpu::Buffer,
+    bind_group: InstanceBufferBindGroup,
+    capacity: u64, // in entries
+    draw_items: Vec<DrawItem>,
+    batches: Vec<Batch>,
     dirty: bool,
 }
-impl InstanceMap {
-    pub fn new() -> Self {
-        Self {
-            buffer: None,
-            buffer_len: 0,
-            buffer_cap: 0,
-            model_map: HashMap::new(),
-            ranges: HashMap::new(),
-            staging: Vec::new(),
-            dirty: false,
-        }
-    }
-    pub fn add_instance(&mut self, instance: Instance) {
-        self.model_map.entry(instance.model).or_default().push(instance);
-    }
-    pub fn clear_instances(&mut self) {
-        for insts in self.model_map.values_mut() {
-            insts.clear();
-        }
-    }
-    pub fn mesh_range(&self, mesh: MeshHandle) -> Option<MeshRange> {
-        self.ranges.get(&mesh).copied()
-    }
-    pub fn mesh_ranges(&self) -> impl Iterator<Item = (MeshHandle, MeshRange)> {
-        self.ranges.iter().map(|(h, r)| (*h, *r))
-    }
-    pub fn update_buffer(&mut self, queue: &wgpu::Queue, device: &wgpu::Device) {
-        // send instance map to staging buffer
-        self.staging.clear();
-        self.ranges.clear();
-        fill_staging(&mut self.staging, &mut self.ranges, &self.model_map);
 
-        let buf = self.buffer.take();
-        match buf {
-            // if the buffer wasn't created yet
-            None => {
-                // initial capacity: 64kb
-                let cap = self.staging.len().max(1 << 16);
-                let b = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("dynamic instance buffer"),
-                    mapped_at_creation: false,
-                    size: cap as u64,
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                });
-                queue.write_buffer(&b, 0, bytemuck::cast_slice(&self.staging));
-                self.buffer = Some(b);
-                self.buffer_cap = cap;
-                self.buffer_len = self.staging.len();
-                self.dirty = true;
+impl InstanceBuffer {
+    const ENTRY_SIZE: u64 = std::mem::size_of::<InstanceData>() as u64;
+
+    pub fn new(
+        device: &wgpu::Device,
+        layout: &InstanceBufferBindGroupLayout,
+        capacity: u64,
+    ) -> Self {
+        let capacity = capacity.max(64);
+        let (buffer, bind_group) = Self::create(device, layout, capacity);
+        Self {
+            buffer,
+            bind_group,
+            capacity,
+            batches: Vec::new(),
+            draw_items: Vec::new(),
+            dirty: true,
+        }
+    }
+
+    fn create(
+        device: &wgpu::Device,
+        layout: &InstanceBufferBindGroupLayout,
+        capacity: u64,
+    ) -> (wgpu::Buffer, InstanceBufferBindGroup) {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("instance buffer"),
+            size: capacity * Self::ENTRY_SIZE,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind_group = InstanceBufferBindGroup::new(device, layout, &buffer);
+        (buffer, bind_group)
+    }
+
+    pub fn bind_group(&self) -> &wgpu::BindGroup {
+        self.bind_group.bind_group()
+    }
+
+    /// Sort the draw items, upload them, and rebuild the batch list.
+    pub fn rebuild(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layout: &InstanceBufferBindGroupLayout,
+        instances: &[Instance],
+        resources: &ResourceManager,
+    ) {
+        self.collect_draws(instances, resources);
+        // Material first, then mesh: fewer bind group switches while drawing.
+        self.draw_items
+            .sort_unstable_by_key(|i| (i.material, i.mesh));
+
+        let mut data = Vec::with_capacity(self.draw_items.len());
+        self.batches.clear();
+        for item in &self.draw_items {
+            let index = data.len() as u32;
+            data.push(InstanceData::new(item.world));
+            match self.batches.last_mut() {
+                Some(b) if b.mesh == item.mesh && b.material == item.material => b.count += 1,
+                _ => self.batches.push(Batch {
+                    material: item.material,
+                    mesh: item.mesh,
+                    first: index,
+                    count: 1,
+                }),
             }
-            Some(b) => {
-                // if we have enough space
-                if self.buffer_cap >= self.staging.len() {
-                    queue.write_buffer(&b, 0, bytemuck::cast_slice(&self.staging));
-                    self.buffer = Some(b);
-                    self.buffer_len = self.staging.len();
-                } else {
-                    let cap = self.buffer_cap * 2;
-                    let b = device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("dynamic instance buffer"),
-                        mapped_at_creation: false,
-                        size: cap as u64,
-                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                    });
-                    queue.write_buffer(&b, 0, bytemuck::cast_slice(&self.staging));
-                    self.buffer = Some(b);
-                    self.buffer_cap = cap;
-                    self.buffer_len = self.staging.len();
-                    self.dirty = true;
+        }
+
+        // Grow (doubling) when needed. The bind group must be recreated with it.
+        let needed = data.len() as u64;
+        if needed > self.capacity {
+            self.capacity = needed.next_power_of_two();
+            let (buffer, bind_group) = Self::create(device, layout, self.capacity);
+            self.buffer = buffer;
+            self.bind_group = bind_group;
+        }
+
+        if !data.is_empty() {
+            queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&data));
+        }
+        self.dirty = false;
+    }
+
+    /// Walk every instance's mesh nodes. Node transforms are precomputed
+    /// (model_space), so this is a flat loop with no recursion.
+    fn collect_draws(&mut self, instances: &[Instance], resources: &ResourceManager) {
+        self.draw_items.clear();
+        for instance in instances {
+            let model = resources.get_model(instance.model);
+            for node in &model.nodes {
+                if let NodeKind::Mesh(node_meshes) = &node.kind {
+                    let world = instance.transform.mat4() * node.model_space;
+                    for &mesh in node_meshes {
+                        self.draw_items.push(DrawItem {
+                            material: resources.get_mesh(mesh).material,
+                            mesh,
+                            world,
+                        });
+                    }
                 }
             }
         }
     }
-
-    pub fn buffer(&self) -> &wgpu::Buffer {
-        self.buffer
-            .as_ref()
-            .expect("Buffer should be updated at least once before being retrieved")
-    }
-    /// `true` if the buffer was recreated and needs to be rebound
-    pub fn is_dirty(&self) -> bool {
-        self.dirty
-    }
-    /// clears the `dirty` bit. Call this after recreating the BindGroup.
-    pub fn clear_dirty(&mut self) {
-        self.dirty = false;
+    /// Draw everything in one buffer. Call once for the static buffer and once
+    /// for the dynamic one.
+    pub fn draw<'a>(&self, pass: &mut wgpu::RenderPass<'a>, resources: &ResourceManager) {
+        pass.set_bind_group(2, self.bind_group(), &[]);
+        let mut current_material = None;
+        for batch in &self.batches {
+            if current_material != Some(batch.material) {
+                pass.set_bind_group(
+                    1,
+                    resources
+                        .get_material(batch.material)
+                        .bind_group
+                        .bind_group(),
+                    &[],
+                );
+                current_material = Some(batch.material);
+            }
+            let mesh = resources.get_mesh(batch.mesh);
+            pass.set_vertex_buffer(0, mesh.vertex_buffer.buffer().slice(..));
+            pass.set_index_buffer(
+                mesh.index_buffer.buffer().slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            pass.draw_indexed(
+                0..mesh.num_elements,
+                0,
+                batch.first..batch.first + batch.count,
+            );
+        }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Matching WGSL:
+//
+// struct InstanceData {
+//     model: mat4x4<f32>,
+//     normal: mat3x3<f32>,
+// };
+// @group(2) @binding(0) var<storage, read> instances: array<InstanceData>;
+//
+// @vertex
+// fn vs_main(v: VertexInput, @builtin(instance_index) i: u32) -> VertexOutput {
+//     let inst = instances[i];            // i already includes batch.first
+//     let world_pos = inst.model * vec4<f32>(v.position, 1.0);
+//     let normal = normalize(inst.normal * v.normal);
+//     ...
+// }
+//
+// Bind group layout entry for group 2:
+//     visibility: wgpu::ShaderStages::VERTEX,
+//     ty: wgpu::BindingType::Buffer {
+//         ty: wgpu::BufferBindingType::Storage { read_only: true },
+//         has_dynamic_offset: false,
+//         min_binding_size: None,
+//     },
+// ---------------------------------------------------------------------------

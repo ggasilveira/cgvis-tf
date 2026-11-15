@@ -14,6 +14,12 @@ impl CameraUniform {
             view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
         }
     }
+    pub fn from_camera(cam: &Camera) -> Self {
+        Self {
+            view_position: cam.eye.extend(1.).to_array(),
+            view_proj: cam.build_matrix().to_cols_array_2d(),
+        }
+    }
     pub fn update(&mut self, cam: &Camera) {
         // change this to `rows` if the uniform is row major
         self.view_position = cam.eye.extend(1.).to_array();
@@ -92,12 +98,15 @@ pub const LIGHTS_SIZE: usize = 16;
 pub struct LightsUniform {
     lights: [LightUniform; LIGHTS_SIZE],
     size: u32,
+    // WGSL rounds the struct size up to its 16-byte alignment
+    padding: [u32; 3],
 }
 impl LightsUniform {
     pub fn new() -> Self {
         Self {
             lights: [LightUniform::default(); LIGHTS_SIZE],
             size: LIGHTS_SIZE as u32,
+            padding: [0; 3],
         }
     }
     pub fn update(&mut self, lights: &[Light]) {
@@ -107,4 +116,14 @@ impl LightsUniform {
             self.lights[i] = LightUniform::new(light);
         }
     }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct MaterialUniform {
+    pub base_color: [f32; 4],
+    pub metallic: f32,
+    pub roughness: f32,
+    pub normal_scale: f32,
+    pub alpha_cutoff: f32,
 }

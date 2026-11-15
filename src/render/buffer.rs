@@ -4,7 +4,7 @@ use wgpu::util::DeviceExt;
 
 use crate::render::{
     model::{ModelIndex, ModelVertex},
-    uniform::{CameraUniform, LightsUniform},
+    uniform::{CameraUniform, LightsUniform, MaterialUniform},
 };
 
 pub trait Bufferable {
@@ -81,5 +81,17 @@ impl Bufferable for [ModelIndex] {
     }
     fn usage(&self) -> wgpu::BufferUsages {
         wgpu::BufferUsages::INDEX
+    }
+}
+
+impl Bufferable for MaterialUniform {
+    fn label(&self) -> Option<&str> {
+        Some("Material uniform")
+    }
+    fn contents(&self) -> &[u8] {
+        bytemuck::bytes_of(self)
+    }
+    fn usage(&self) -> wgpu::BufferUsages {
+        wgpu::BufferUsages::UNIFORM
     }
 }

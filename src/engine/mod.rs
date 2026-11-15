@@ -3,11 +3,18 @@ mod context;
 mod input;
 mod object;
 mod scene;
-use std::collections::HashMap;
 
-use crate::low::context::RenderContext;
-use crate::low::render::RenderState;
-use crate::low::resources::{ModelHandle, ResourceManager};
+use crate::math::Transform;
+use crate::render::camera::Camera;
+use crate::render::light::{DirectionalLight, Light};
+use std::time::Instant;
+
+use crate::render::context::RenderContext;
+use crate::render::instance::Instance;
+use crate::render::pipeline::RenderState;
+use crate::render::resources::ResourceManager;
+pub use context::EngineContext;
+use glam::{Quat, Vec2, Vec3};
 use input::Input;
 use winit::event::{KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
@@ -18,16 +25,57 @@ pub struct Engine {
     input: Input,
     render: RenderState,
     resources: ResourceManager,
+    instances: Vec<Instance>,
+    last_frame: Instant,
+    last_mouse: Vec2,
+    curr_mouse: Vec2,
+    cam_ctl: CameraController,
+    camera: Camera,
 }
 impl Engine {
     pub fn new(window: winit::window::Window) -> anyhow::Result<Self> {
         let context = RenderContext::new(window)?;
         let input = Input::new();
-        let render = RenderState::new(&context)?;
+        let mut render = RenderState::new(&context)?;
+        let mut resources = ResourceManager::new(&context, "assets")?;
+        let last_frame = Instant::now();
+        let mut instances = Vec::new();
+        instances.push(Instance {
+            model: resources.load_glb_model(&context, "models/tree1.glb")?,
+            transform: Transform {
+                position: Vec3::ZERO,
+                rotation: Quat::IDENTITY,
+                scale: Vec3::ONE,
+            },
+        });
+        render.set_static_instances(&context, &resources, &instances);
+        let camera = Camera {
+            eye: glam::Vec3::new(0.0, 1.0, 2.0),
+            target: glam::Vec3::ZERO,
+            aspect: context.config.width as f32 / context.config.height as f32,
+            fovy: 45.0,
+            znear: 0.1,
+            zfar: 100.0,
+        };
+        render.update_lights(
+            &context,
+            &[Light::Directional(DirectionalLight {
+                direction: Vec3::NEG_Y,
+                color: Vec3::new(1., 1., 1.),
+                intensity: 1.,
+            })],
+        );
         Ok(Self {
             context,
             render,
             input,
+            resources,
+            instances,
+            last_frame,
+            last_mouse: Vec2::ZERO,
+            curr_mouse: Vec2::ZERO,
+            cam_ctl: CameraController::new(1.),
+            camera,
         })
     }
     pub fn handle_event(&mut self, event: WindowEvent, event_loop: &ActiveEventLoop) {
@@ -38,14 +86,21 @@ impl Engine {
                     .resize(&mut self.context, size.width, size.height)
             }
             WindowEvent::RedrawRequested => {
-                engine.update();
-                match engine.render() {
+                let now = Instant::now();
+                let delta = now - self.last_frame;
+                self.input
+                    .set_mouse_delta(self.curr_mouse - self.last_mouse);
+                self.last_mouse = self.curr_mouse;
+                self.update(delta.as_secs_f32());
+
+                match self.render.render(&self.context, &self.resources) {
                     Ok(_) => {}
                     Err(e) => {
                         log::error!("{e}");
                         event_loop.exit();
                     }
                 }
+                self.context.window.request_redraw();
             }
             WindowEvent::KeyboardInput {
                 event:
@@ -62,6 +117,10 @@ impl Engine {
                     self.input.down_keys.remove(&code);
                 }
             }
+            WindowEvent::CursorMoved {
+                device_id,
+                position,
+            } => self.curr_mouse = Vec2::new(position.x as f32, position.y as f32),
             WindowEvent::MouseInput {
                 device_id,
                 state,
@@ -74,6 +133,53 @@ impl Engine {
                 }
             }
             _ => {}
+        }
+    }
+    fn update(&mut self, delta: f32) {
+        self.cam_ctl.update_camera(&self.input, &mut self.camera);
+        self.render.update_camera(&self.context, &self.camera);
+    }
+}
+
+pub struct CameraController {
+    speed: f32,
+}
+
+use winit::keyboard::KeyCode;
+impl CameraController {
+    pub fn new(speed: f32) -> Self {
+        Self { speed }
+    }
+
+    pub fn update_camera(&self, input: &Input, camera: &mut crate::render::camera::Camera) {
+        use glam::Vec3;
+        let forward = camera.target - camera.eye;
+        let forward_norm = forward.normalize();
+        let forward_mag = forward.length();
+
+        // Prevents glitching when the camera gets too close to the
+        // center of the scene.
+        if input.is_key_down(KeyCode::KeyW) && forward_mag > self.speed {
+            camera.eye += forward_norm * self.speed;
+        }
+        if input.is_key_down(KeyCode::KeyS) {
+            camera.eye -= forward_norm * self.speed;
+        }
+
+        let right = forward_norm.cross(Vec3::Y);
+
+        // Redo radius calc in case the forward/backward is pressed.
+        let forward = camera.target - camera.eye;
+        let forward_mag = forward.length();
+
+        if input.is_key_down(KeyCode::KeyD) {
+            // Rescale the distance between the target and the eye so
+            // that it doesn't change. The eye, therefore, still
+            // lies on the circle made by the target and eye.
+            camera.eye = camera.target - (forward + right * self.speed).normalize() * forward_mag;
+        }
+        if input.is_key_down(KeyCode::KeyA) {
+            camera.eye = camera.target - (forward - right * self.speed).normalize() * forward_mag;
         }
     }
 }

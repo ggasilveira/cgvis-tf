@@ -15,8 +15,8 @@ pub struct CreateTextureArgs {
 impl Default for CreateTextureArgs {
     fn default() -> Self {
         Self {
-            repeat_mode_horizontal: wgpu::AddressMode::ClampToEdge,
-            repeat_mode_vertical: wgpu::AddressMode::ClampToEdge,
+            repeat_mode_horizontal: wgpu::AddressMode::Repeat,
+            repeat_mode_vertical: wgpu::AddressMode::Repeat,
             format: Texture::DEFAULT_FORMAT,
         }
     }
@@ -28,13 +28,13 @@ impl Texture {
     pub const NORMAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
     pub const DEFAULT_ARGS: CreateTextureArgs = CreateTextureArgs {
-        repeat_mode_horizontal: wgpu::AddressMode::ClampToEdge,
-        repeat_mode_vertical: wgpu::AddressMode::ClampToEdge,
+        repeat_mode_horizontal: wgpu::AddressMode::Repeat,
+        repeat_mode_vertical: wgpu::AddressMode::Repeat,
         format: Self::DEFAULT_FORMAT,
     };
     pub const NORMAL_ARGS: CreateTextureArgs = CreateTextureArgs {
-        repeat_mode_horizontal: wgpu::AddressMode::ClampToEdge,
-        repeat_mode_vertical: wgpu::AddressMode::ClampToEdge,
+        repeat_mode_horizontal: wgpu::AddressMode::Repeat,
+        repeat_mode_vertical: wgpu::AddressMode::Repeat,
         format: Self::NORMAL_FORMAT,
     };
 

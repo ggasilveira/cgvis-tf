@@ -1,4 +1,4 @@
-use crate::low::resources::ModelHandle;
+use crate::render::resources::ModelHandle;
 use glam::prelude::*;
 
 pub struct EngineApi {}

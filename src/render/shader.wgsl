@@ -10,14 +10,9 @@ struct VertexInput {
     @location(3) tangent: vec3<f32>,
     @location(4) bitangent: vec3<f32>,
 }
-struct InstanceInput {
-    @location(5) model_matrix_0: vec4<f32>,
-    @location(6) model_matrix_1: vec4<f32>,
-    @location(7) model_matrix_2: vec4<f32>,
-    @location(8) model_matrix_3: vec4<f32>,
-    @location(9) normal_matrix_0: vec3<f32>,
-    @location(10) normal_matrix_1: vec3<f32>,
-    @location(11) normal_matrix_2: vec3<f32>,
+struct InstanceData {
+    model: mat4x4<f32>,
+    normal: mat3x3<f32>,
 }
 struct PointLight {
     position: vec3<f32>,
@@ -57,6 +52,13 @@ struct LightsUniform {
     lights: array<Light, 16>,
     size: u32,
 }
+struct MaterialUniform {
+    base_color: vec4<f32>,
+    metallic: f32,
+    roughness: f32,
+    normal_scale: f32,
+    alpha_cutoff: f32,
+}
 
 @group(0) @binding(0)
 var<uniform> camera: Camera;
@@ -64,23 +66,16 @@ var<uniform> camera: Camera;
 @group(0) @binding(1)
 var<uniform> lights: LightsUniform;
 
+@group(2) @binding(0)
+var<storage, read> instances: array<InstanceData>;
+
 @vertex
-fn vs_main(model: VertexInput, instance: InstanceInput) -> VertexOutput {
+fn vs_main(v: VertexInput, @builtin(instance_index) i: u32) -> VertexOutput {
     var out: VertexOutput;
-    let model_matrix = mat4x4<f32>(
-            instance.model_matrix_0,
-            instance.model_matrix_1,
-            instance.model_matrix_2,
-            instance.model_matrix_3,
-        );
-    let normal_matrix = mat3x3<f32>(
-            instance.normal_matrix_0,
-            instance.normal_matrix_1,
-            instance.normal_matrix_2,
-        );
-    let world_normal = normalize(normal_matrix * model.normal);
-    let world_tangent = normalize(normal_matrix * model.tangent);
-    let world_bitangent = normalize(normal_matrix * model.bitangent);
+    let inst = instances[i];
+    let world_normal = normalize(inst.normal * v.normal);
+    let world_tangent = normalize(inst.normal * v.tangent);
+    let world_bitangent = normalize(inst.normal * v.bitangent);
     let tangent_matrix = transpose(
             mat3x3<f32>(
                 world_tangent,
@@ -89,32 +84,34 @@ fn vs_main(model: VertexInput, instance: InstanceInput) -> VertexOutput {
             ),
         );
 
-    let world_position = model_matrix * vec4<f32>(model.position, 1.0);
+    let world_position = inst.model * vec4<f32>(v.position, 1.0);
 
     out.clip_position = camera.view_proj * world_position;
-    out.tex_coords = model.tex_coords;
+    out.tex_coords = v.tex_coords;
     out.tangent_position = tangent_matrix * world_position.xyz;
     out.tangent_view_position = tangent_matrix * camera.view_pos.xyz;
-    out.tangent_light_position = tangent_matrix * light.position;
+    out.tangent_light_position = tangent_matrix * lights.lights[0].position;
     return out;
 }
 
-@group(0) @binding(0)
+@group(1) @binding(0)
 var t_diffuse: texture_2d<f32>;
-@group(0) @binding(1)
+@group(1) @binding(1)
 var s_diffuse: sampler;
-@group(0) @binding(2)
+@group(1) @binding(2)
 var t_normal: texture_2d<f32>;
-@group(0) @binding(3)
+@group(1) @binding(3)
 var s_normal: sampler;
+@group(1) @binding(4)
+var<uniform> mat_settings: MaterialUniform;
 
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn shade(in: VertexOutput) -> vec4<f32> {
     let object_color: vec4<f32> = textureSample(t_diffuse, s_diffuse, in.tex_coords);
     let object_normal: vec4<f32> = textureSample(t_normal, s_normal, in.tex_coords);
 
-    let ambient_strength = 0.1;
-    let ambient_color = light.color * ambient_strength;
+    let ambient_strength = 0.5;
+    let light = lights.lights[0];
+    let ambient_color = vec3(1, 1, 1) * ambient_strength;
 
     // create the lightning vectors
     let tangent_normal = object_normal.xyz * 2.0 - 1.0;
@@ -130,4 +127,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let result = (ambient_color + diffuse_color + specular_color) * object_color.xyz;
     return vec4<f32>(result, object_color.a);
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return shade(in);
+}
+
+@fragment
+fn fs_mask(in: VertexOutput) -> @location(0) vec4<f32> {
+    let color = shade(in);
+    if color.a < mat_settings.alpha_cutoff {
+        discard;
+    }
+    return vec4<f32>(color.rgb, 1.0);
 }

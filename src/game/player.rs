@@ -1,4 +1,4 @@
-use crate::engine::Context;
+use crate::engine::EngineContext;
 use glam::prelude::*;
 use winit::keyboard::KeyCode;
 
@@ -20,8 +20,8 @@ impl Player {
     pub fn look_direction(&self) -> Vec3 {
         Mat3::from_rotation_y(self.yaw) * Mat3::from_rotation_x(self.pitch) * Vec3::Z
     }
-    pub fn update(&mut self, ctx: &Context, delta: f32) {
-        let input = ctx.input;
+    pub fn update(&mut self, ctx: &EngineContext, delta: f32) {
+        let input = ctx.input();
         let mut dir = Vec2::ZERO;
         if input.is_key_down(KeyCode::KeyW) {
             dir.y += 1.;
@@ -46,6 +46,10 @@ impl Player {
         } else {
             self.speed = 1.0;
         }
+
+        let updown =
+            input.is_key_down(KeyCode::Space) as i8 - input.is_key_down(KeyCode::ControlLeft) as i8;
+
         let forward2d = Vec2::Y.rotate_angle(self.yaw);
         let right2d = forward2d.rotate_angle(-90.0f32.to_radians());
         let dir = (forward2d * dir.y + right2d * dir.x).normalize();
@@ -54,6 +58,7 @@ impl Player {
 
         self.position.x = pos2d.x;
         self.position.z = pos2d.y;
+        self.position.y = updown as f32 * delta * self.speed;
         self.yaw += input.mouse_delta().x * delta;
         while self.yaw > std::f32::consts::PI * 2.0 {
             self.yaw -= std::f32::consts::PI * 2.0;

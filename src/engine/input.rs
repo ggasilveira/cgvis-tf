@@ -37,4 +37,7 @@ impl Input {
     pub fn mouse_delta(&self) -> Vec2 {
         self.mouse_delta
     }
+    pub fn set_mouse_delta(&mut self, delta: Vec2) {
+        self.mouse_delta = delta;
+    }
 }

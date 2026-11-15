@@ -3,9 +3,9 @@ use crate::render::buffer::Buffer;
 use crate::render::context::RenderContext;
 use crate::render::model::{self, ModelIndex, ModelVertex};
 use crate::render::texture::{CreateTextureArgs, Texture};
+use crate::render::uniform::MaterialUniform;
 use anyhow::Context;
 use glam::{Mat4, Vec2, Vec3};
-use image::Rgba;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -29,17 +29,44 @@ pub struct Mesh {
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum AlphaMode {
     Opaque,
-    Mask { cutoff: f32 },
+    Mask,
     Blend,
 }
 pub struct Material {
-    pub base_color: image::Rgba<f32>,
     pub base_color_texture: TextureHandle,
     pub normal_texture: TextureHandle,
-    pub metallic: f32,
-    pub roughness: f32,
+    pub settings: MaterialUniform,
     pub alpha_mode: AlphaMode,
     pub bind_group: MaterialBindGroup,
+    pub uniform_buffer: Buffer<MaterialUniform>,
+}
+impl Material {
+    pub fn new(
+        ctx: &RenderContext,
+        resources: &ResourceManager,
+        layout: &MaterialBindGroupLayout,
+        settings: MaterialUniform,
+        alpha_mode: AlphaMode,
+        base_color_texture: TextureHandle,
+        normal_texture: TextureHandle,
+    ) -> Self {
+        let uniform_buffer = Buffer::new(&ctx.device, &settings);
+        let bind_group = MaterialBindGroup::new(
+            &ctx.device,
+            layout,
+            &uniform_buffer,
+            resources.get_texture(base_color_texture),
+            resources.get_texture(normal_texture),
+        );
+        Self {
+            base_color_texture,
+            normal_texture,
+            alpha_mode,
+            settings,
+            uniform_buffer,
+            bind_group,
+        }
+    }
 }
 pub struct Model {
     pub nodes: Vec<Node>,
@@ -56,7 +83,8 @@ pub struct Node {
     pub name: String,
     pub parent: Option<usize>,
     pub children: Vec<usize>,
-    pub local: Mat4, // relative from parent, straight from GLTF
+    pub local: Mat4,       // relative from parent, straight from GLTF
+    pub model_space: Mat4, // precomputed, relative to model root
     pub kind: NodeKind,
 }
 
@@ -105,20 +133,22 @@ impl ResourceManager {
         Ok(self.add_texture(txt))
     }
     fn create_default_material(&mut self, ctx: &RenderContext) -> MaterialHandle {
-        self.add_material(Material {
-            base_color: Rgba([1., 1., 1., 1.]),
-            base_color_texture: self.default_base_texture,
-            normal_texture: self.default_normal_texture,
-            metallic: 0.0,
-            roughness: 1.0,
-            alpha_mode: AlphaMode::Opaque,
-            bind_group: MaterialBindGroup::new(
-                &ctx.device,
-                &self.material_bind_group_layout,
-                self.get_texture(self.default_base_texture),
-                self.get_texture(self.default_normal_texture),
-            ),
-        })
+        let settings = MaterialUniform {
+            base_color: [1.; 4],
+            metallic: 0.,
+            roughness: 1.,
+            normal_scale: 1.,
+            alpha_cutoff: 0.,
+        };
+        self.add_material(Material::new(
+            ctx,
+            self,
+            &self.material_bind_group_layout,
+            settings,
+            AlphaMode::Opaque,
+            self.default_base_texture,
+            self.default_normal_texture,
+        ))
     }
     /// Adds an already created texture to the manager
     fn add_texture(&mut self, texture: Texture) -> TextureHandle {
@@ -248,11 +278,13 @@ impl ResourceManager {
             .map(|s| s.to_string())
             .unwrap_or_else(|| format!("node_{node_index}"));
 
+        let local = glam::Mat4::from_cols_array_2d(&node.transform().matrix());
         model_nodes.push(Node {
             name: node_name,
             parent,
             children: Vec::new(),
-            local: glam::Mat4::from_cols_array_2d(&node.transform().matrix()),
+            local,
+            model_space: local,
             kind: NodeKind::Mesh(meshes),
         });
 
@@ -293,36 +325,46 @@ impl ResourceManager {
                     self.add_texture(Texture::from_image(ctx, &img, Texture::DEFAULT_ARGS, None)?)
                 }
             };
-            let normal_texture = match material.normal_texture() {
-                None => self.default_normal_texture,
+            let (normal_texture, normal_scale) = match material.normal_texture() {
+                None => (self.default_normal_texture, 1.0),
                 Some(t) => {
                     let texture = t.texture();
                     let im = &images[texture.source().index()];
                     let img = create_img_from_gltf(im);
-                    self.add_texture(Texture::from_image(ctx, &img, Texture::NORMAL_ARGS, None)?)
+                    (
+                        self.add_texture(Texture::from_image(
+                            ctx,
+                            &img,
+                            Texture::NORMAL_ARGS,
+                            None,
+                        )?),
+                        t.scale(),
+                    )
                 }
             };
-            let alpha_mode = match material.alpha_mode() {
-                gltf::material::AlphaMode::Blend => AlphaMode::Blend,
-                gltf::material::AlphaMode::Opaque => AlphaMode::Opaque,
-                gltf::material::AlphaMode::Mask => AlphaMode::Mask {
-                    cutoff: material.alpha_cutoff().unwrap(),
-                },
+            let (alpha_mode, alpha_cutoff) = match material.alpha_mode() {
+                gltf::material::AlphaMode::Blend => (AlphaMode::Blend, 0.0),
+                gltf::material::AlphaMode::Opaque => (AlphaMode::Opaque, 0.0),
+                gltf::material::AlphaMode::Mask => {
+                    (AlphaMode::Mask, material.alpha_cutoff().unwrap())
+                }
             };
-            let mat = Material {
-                base_color: image::Rgba(pbr.base_color_factor()),
-                base_color_texture,
-                normal_texture,
+            let settings = MaterialUniform {
+                base_color: pbr.base_color_factor(),
                 metallic: pbr.metallic_factor(),
                 roughness: pbr.roughness_factor(),
-                alpha_mode,
-                bind_group: MaterialBindGroup::new(
-                    &ctx.device,
-                    &self.material_bind_group_layout,
-                    self.get_texture(base_color_texture),
-                    self.get_texture(normal_texture),
-                ),
+                alpha_cutoff,
+                normal_scale,
             };
+            let mat = Material::new(
+                ctx,
+                self,
+                &self.material_bind_group_layout,
+                settings,
+                alpha_mode,
+                base_color_texture,
+                normal_texture,
+            );
             materials.insert(material.index().unwrap(), self.add_material(mat));
         }
         let mut model = Model {

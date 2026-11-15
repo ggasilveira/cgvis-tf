@@ -1,12 +1,20 @@
+//! Render pipelines for the three glTF alpha modes, each in a single-sided
+//! (back-face culled) and a double-sided (no culling) variant: 6 in total,
+//! all built from one shader module.
+//!
+//! Shader entry points expected in the module:
+//!   vs_main  - shared vertex shader
+//!   fs_main  - opaque and blend
+//!   fs_mask  - alpha test with `discard`
+//!
+//! Written against wgpu 24/25. In other versions some field names differ
+//! (e.g. entry_point was a plain &str before 22, `cache` was added in 22).
+//!
 use crate::render::bindgroup::{
-    GlobalBindGroup, GlobalBindGroupLayout, MaterialBindGroup, MaterialBindGroupLayout,
+    GlobalBindGroup, GlobalBindGroupLayout, InstanceBufferBindGroupLayout, MaterialBindGroupLayout,
 };
-use crate::render::buffer::Buffer;
-use crate::render::camera::Camera;
-use crate::render::context::RenderContext;
-use crate::render::instance::*;
 use crate::render::model;
-use crate::render::resources::ResourceManager;
+use crate::render::resources::AlphaMode;
 use crate::render::texture;
 use crate::render::uniform::{CameraUniform, LightsUniform};
 use model::Vertex;
@@ -19,10 +27,15 @@ impl RenderPipelineLayout {
         device: &wgpu::Device,
         global_layout: &GlobalBindGroupLayout,
         material_layout: &MaterialBindGroupLayout,
+        instance_buffer_layout: &InstanceBufferBindGroupLayout,
     ) -> Self {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("render_pipeline_layout"),
-            bind_group_layouts: &[Some(global_layout.layout()), Some(material_layout.layout())],
+            bind_group_layouts: &[
+                Some(global_layout.layout()),
+                Some(material_layout.layout()),
+                Some(instance_buffer_layout.layout()),
+            ],
             immediate_size: 0,
         });
         Self { layout }
@@ -38,8 +51,13 @@ fn create_render_pipeline(
     depth_format: Option<wgpu::TextureFormat>,
     vertex_layouts: &[Option<wgpu::VertexBufferLayout>],
     shader: wgpu::ShaderModuleDescriptor,
+    alpha_mode: AlphaMode,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(shader);
+    let frag = match alpha_mode {
+        AlphaMode::Blend | AlphaMode::Opaque => "fs_main",
+        AlphaMode::Mask => "fs_mask",
+    };
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Render Pipeline"),
@@ -52,7 +70,7 @@ fn create_render_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fs_main"),
+            entry_point: Some(frag),
             targets: &[Some(wgpu::ColorTargetState {
                 format: color_format,
                 blend: Some(wgpu::BlendState {
@@ -77,7 +95,7 @@ fn create_render_pipeline(
         },
         depth_stencil: depth_format.map(|format| wgpu::DepthStencilState {
             format,
-            depth_write_enabled: Some(true),
+            depth_write_enabled: Some(alpha_mode != AlphaMode::Blend),
             depth_compare: Some(wgpu::CompareFunction::Less),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
@@ -92,259 +110,127 @@ fn create_render_pipeline(
     })
 }
 
-pub struct RenderState {
-    is_surface_configured: bool,
-    render_pipeline: wgpu::RenderPipeline,
-    camera: Camera,
-    camera_uniform: CameraUniform,
-    camera_buffer: Buffer<CameraUniform>,
-    depth_texture: texture::Texture,
-    lights_uniform: LightsUniform,
-    lights_buffer: Buffer<LightsUniform>,
-    static_global_bg: GlobalBindGroup,
-    dynamic_global_bg: GlobalBindGroup,
-    dyn_instance_map: InstanceMap,
-    static_instance_buffer: StaticInstanceBuffer,
-    global_bind_group_layout: GlobalBindGroupLayout,
-    material_bind_group_layout: MaterialBindGroupLayout,
+pub struct MaterialPipelines {
+    // [alpha_mode][double_sided as usize]
+    pipelines: [[wgpu::RenderPipeline; 2]; 3],
 }
 
-impl RenderState {
-    pub fn new(context: &RenderContext) -> anyhow::Result<Self> {
-        let camera = Camera {
-            eye: glam::Vec3::new(0.0, 1.0, 2.0),
-            target: glam::Vec3::ZERO,
-            aspect: context.config.width as f32 / context.config.height as f32,
-            fovy: 45.0,
-            znear: 0.1,
-            zfar: 100.0,
-        };
-        let mut camera_uniform = CameraUniform::new();
-        camera_uniform.update(&camera);
-        let camera_buffer = Buffer::new(&context.device, &camera_uniform);
-        let lights_uniform = LightsUniform::new();
-        let lights_buffer = Buffer::new(&context.device, &lights_uniform);
+impl MaterialPipelines {
+    pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-        let material_bind_group_layout = MaterialBindGroupLayout::new(&context.device);
-        let global_bind_group_layout = GlobalBindGroupLayout::new(&context.device);
-        let dyn_instance_map = InstanceMap::new();
-        let static_instance_buffer = StaticInstanceMap::new().bake(&context.device);
-        let static_global_bg = GlobalBindGroup::new_static(
-            &context.device,
-            &global_bind_group_layout,
-            &camera_buffer,
-            &lights_buffer,
-            &static_instance_buffer,
-        );
-        let dynamic_global_bg = GlobalBindGroup::new_dynamic(
-            &context.device,
-            &global_bind_group_layout,
-            &camera_buffer,
-            &lights_buffer,
-            &dyn_instance_map,
-        );
-
-        let render_pipeline_layout = RenderPipelineLayout::new(
-            &context.device,
-            &global_bind_group_layout,
-            &material_bind_group_layout,
-        );
-
-        let depth_texture = texture::Texture::create_depth_texture(context, "depth_texture");
-
-        let render_pipeline = {
-            let shader = wgpu::include_wgsl!("shader.wgsl");
-            create_render_pipeline(
-                &context.device,
-                &render_pipeline_layout,
-                context.config.format,
-                Some(texture::Texture::DEPTH_FORMAT),
-                &[Some(model::ModelVertex::desc())],
+    pub fn new(
+        device: &wgpu::Device,
+        shader: &wgpu::ShaderModule,
+        layout: &wgpu::PipelineLayout,
+        vertex_layouts: &[wgpu::VertexBufferLayout],
+        color_format: wgpu::TextureFormat,
+    ) -> Self {
+        let make = |mode: AlphaMode, double_sided: bool| {
+            Self::create(
+                device,
                 shader,
+                layout,
+                vertex_layouts,
+                color_format,
+                mode,
+                double_sided,
             )
         };
+        Self {
+            pipelines: [
+                [
+                    make(AlphaMode::Opaque, false),
+                    make(AlphaMode::Opaque, true),
+                ],
+                [make(AlphaMode::Mask, false), make(AlphaMode::Mask, true)],
+                [make(AlphaMode::Blend, false), make(AlphaMode::Blend, true)],
+            ],
+        }
+    }
 
-        Ok(Self {
-            is_surface_configured: false,
-            render_pipeline,
-            static_global_bg,
-            dynamic_global_bg,
-            camera,
-            camera_uniform,
-            camera_buffer,
-            lights_uniform,
-            lights_buffer,
-            depth_texture,
-            dyn_instance_map,
-            static_instance_buffer,
-            global_bind_group_layout,
-            material_bind_group_layout,
+    pub fn get(&self, mode: AlphaMode, double_sided: bool) -> &wgpu::RenderPipeline {
+        &self.pipelines[mode as usize][double_sided as usize]
+    }
+
+    fn create(
+        device: &wgpu::Device,
+        shader: &wgpu::ShaderModule,
+        layout: &wgpu::PipelineLayout,
+        vertex_layouts: &[wgpu::VertexBufferLayout],
+        color_format: wgpu::TextureFormat,
+        mode: AlphaMode,
+        double_sided: bool,
+    ) -> wgpu::RenderPipeline {
+        // Everything that differs between the alpha modes is in this match.
+        let (fragment_entry, blend, depth_write) = match mode {
+            AlphaMode::Opaque => ("fs_main", None, true),
+            AlphaMode::Mask => ("fs_mask", None, true),
+            AlphaMode::Blend => ("fs_main", Some(wgpu::BlendState::ALPHA_BLENDING), false),
+        };
+
+        let label = format!(
+            "material {:?}{}",
+            mode,
+            if double_sided { " double-sided" } else { "" }
+        );
+
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(&label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: vertex_layouts,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some(fragment_entry),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: color_format,
+                    blend,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                // glTF uses counter-clockwise front faces, same as wgpu's default
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: if double_sided {
+                    None
+                } else {
+                    Some(wgpu::Face::Back)
+                },
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: Self::DEPTH_FORMAT,
+                depth_write_enabled: depth_write,
+                // Blend still tests against opaque depth, it just doesn't write.
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
         })
     }
-    pub fn resize(&mut self, context: &mut RenderContext, width: u32, height: u32) {
-        if width > 0 && height > 0 {
-            context.config.width = width;
-            context.config.height = height;
-            context.surface.configure(&context.device, &context.config);
-            self.is_surface_configured = true;
-            self.depth_texture = texture::Texture::create_depth_texture(context, "depth_texture");
-        }
-    }
-    pub fn update_cam_uniform(&mut self, context: &RenderContext, cam_uniform: CameraUniform) {
-        self.camera_buffer.update(&context.queue, &cam_uniform);
-    }
-    pub fn dyn_instance_map(&mut self) -> &mut InstanceMap {
-        &mut self.dyn_instance_map
-    }
-    pub fn set_static_instance_buffer(
-        &mut self,
-        ctx: &RenderContext,
-        buffer: StaticInstanceBuffer,
-    ) {
-        self.static_instance_buffer = buffer;
-        self.rebind_static(ctx);
-    }
-    fn rebind_static(&mut self, ctx: &RenderContext) {
-        self.static_global_bg = GlobalBindGroup::new_static(
-            &ctx.device,
-            &self.global_bind_group_layout,
-            &self.camera_buffer,
-            &self.lights_buffer,
-            &self.static_instance_buffer,
-        );
-    }
-    fn rebind_dynamic(&mut self, ctx: &RenderContext) {
-        self.dynamic_global_bg = GlobalBindGroup::new_dynamic(
-            &ctx.device,
-            &self.global_bind_group_layout,
-            &self.camera_buffer,
-            &self.lights_buffer,
-            &self.dyn_instance_map,
-        );
-    }
-    fn render(
-        &mut self,
-        context: &RenderContext,
-        resources: &ResourceManager,
-    ) -> anyhow::Result<()> {
-        context.window.request_redraw();
-
-        if !self.is_surface_configured {
-            return Ok(());
-        }
-
-        // update the global bind group
-        if self.dyn_instance_map.is_dirty() {
-            self.dyn_instance_map.clear_dirty();
-            self.rebind_dynamic(context);
-        }
-
-        let output = match context.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(surface_txt) => surface_txt,
-            wgpu::CurrentSurfaceTexture::Suboptimal(surface_txt) => surface_txt,
-            wgpu::CurrentSurfaceTexture::Timeout
-            | wgpu::CurrentSurfaceTexture::Occluded
-            | wgpu::CurrentSurfaceTexture::Validation => {
-                return Ok(());
-            }
-            wgpu::CurrentSurfaceTexture::Outdated => {
-                context.surface.configure(&context.device, &context.config);
-                return Ok(());
-            }
-            wgpu::CurrentSurfaceTexture::Lost => {
-                anyhow::bail!("Lost device");
-            }
-        };
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = context
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Render Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.1,
-                        g: 0.2,
-                        b: 0.3,
-                        a: 1.0,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &self.depth_texture.view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
-            occlusion_query_set: None,
-            timestamp_writes: None,
-            multiview_mask: None,
-        });
-
-        render_pass.set_pipeline(&self.render_pipeline);
-
-        // we set once for drawing static instances
-        render_pass.set_bind_group(
-            GlobalBindGroup::GROUP,
-            self.static_global_bg.bind_group(),
-            &[],
-        );
-
-        for (mesh_handle, mesh_range) in self.static_instance_buffer.mesh_ranges() {
-            let mesh = resources.get_mesh(mesh_handle);
-            let material = resources.get_material(mesh.material);
-            render_pass.set_bind_group(
-                MaterialBindGroup::GROUP,
-                material.bind_group.bind_group(),
-                &[],
-            );
-            render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            render_pass.draw_indexed(0..mesh.num_elements, 0, mesh_range.instance_range());
-        }
-
-        // and another for the dynamic instances
-        render_pass.set_bind_group(
-            GlobalBindGroup::GROUP,
-            self.dynamic_global_bg.bind_group(),
-            &[],
-        );
-
-        for (mesh_handle, mesh_range) in self.dyn_instance_map.mesh_ranges() {
-            let mesh = resources.get_mesh(mesh_handle);
-            let material = resources.get_material(mesh.material);
-            render_pass.set_bind_group(
-                MaterialBindGroup::GROUP,
-                material.bind_group.bind_group(),
-                &[],
-            );
-            render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            render_pass.draw_indexed(0..mesh.num_elements, 0, mesh_range.instance_range());
-        }
-
-        // use model::DrawLight;
-        // render_pass.set_pipeline(&self.light_render_pipeline);
-        // render_pass.draw_light_model(
-        //     &self.obj_model,
-        //     &self.cam_bind_group,
-        //     &self.light_bind_group,
-        // );
-        drop(render_pass);
-
-        context.queue.submit(std::iter::once(encoder.finish()));
-        context.queue.present(output);
-        Ok(())
-    }
 }
+
+// ---------------------------------------------------------------------------
+// Draw loop: batches sorted by (alpha_mode, double_sided, material, mesh),
+// so the pipeline only changes a handful of times per pass.
+//
+// let mut current: Option<(AlphaMode, bool)> = None;
+// for batch in &batches {
+//     let material = &materials[batch.material.0 as usize];
+//     let key = (material.alpha_mode, material.double_sided);
+//     if current != Some(key) {
+//         pass.set_pipeline(pipelines.get(key.0, key.1));
+//         current = Some(key);
+//     }
+//     // material bind group, vertex/index buffers, draw_indexed ...
+// }
+// ---------------------------------------------------------------------------
