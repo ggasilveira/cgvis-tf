@@ -3,8 +3,8 @@ use std::marker::PhantomData;
 use wgpu::util::DeviceExt;
 
 use crate::render::{
-    model::{ModelIndex, ModelVertex},
     uniform::{CameraUniform, LightsUniform, MaterialUniform},
+    vertex::{ModelIndex, ModelVertex},
 };
 
 pub trait Bufferable {

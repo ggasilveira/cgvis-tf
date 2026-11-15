@@ -2506,6 +2506,7 @@ name = "slender"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bitflags 2.13.2",
  "bytemuck",
  "env_logger",
  "glam",

@@ -11,18 +11,14 @@
 //! (e.g. entry_point was a plain &str before 22, `cache` was added in 22).
 //!
 use crate::render::bindgroup::{
-    GlobalBindGroup, GlobalBindGroupLayout, InstanceBufferBindGroupLayout, MaterialBindGroupLayout,
+    GlobalBindGroupLayout, InstanceBufferBindGroupLayout, MaterialBindGroupLayout,
 };
-use crate::render::model;
 use crate::render::resources::AlphaMode;
-use crate::render::texture;
-use crate::render::uniform::{CameraUniform, LightsUniform};
-use model::Vertex;
 
-struct RenderPipelineLayout {
+pub struct MaterialPipelineLayout {
     layout: wgpu::PipelineLayout,
 }
-impl RenderPipelineLayout {
+impl MaterialPipelineLayout {
     pub fn new(
         device: &wgpu::Device,
         global_layout: &GlobalBindGroupLayout,
@@ -30,7 +26,7 @@ impl RenderPipelineLayout {
         instance_buffer_layout: &InstanceBufferBindGroupLayout,
     ) -> Self {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("render_pipeline_layout"),
+            label: Some("Material pipeline layout"),
             bind_group_layouts: &[
                 Some(global_layout.layout()),
                 Some(material_layout.layout()),
@@ -44,71 +40,6 @@ impl RenderPipelineLayout {
         &self.layout
     }
 }
-fn create_render_pipeline(
-    device: &wgpu::Device,
-    layout: &RenderPipelineLayout,
-    color_format: wgpu::TextureFormat,
-    depth_format: Option<wgpu::TextureFormat>,
-    vertex_layouts: &[Option<wgpu::VertexBufferLayout>],
-    shader: wgpu::ShaderModuleDescriptor,
-    alpha_mode: AlphaMode,
-) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(shader);
-    let frag = match alpha_mode {
-        AlphaMode::Blend | AlphaMode::Opaque => "fs_main",
-        AlphaMode::Mask => "fs_mask",
-    };
-
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Render Pipeline"),
-        layout: Some(layout.layout()),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            buffers: vertex_layouts,
-            compilation_options: Default::default(),
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some(frag),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: color_format,
-                blend: Some(wgpu::BlendState {
-                    alpha: wgpu::BlendComponent::REPLACE,
-                    color: wgpu::BlendComponent::REPLACE,
-                }),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: Default::default(),
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: Some(wgpu::Face::Back),
-            // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
-            polygon_mode: wgpu::PolygonMode::Fill,
-            // Requires Features::DEPTH_CLIP_CONTROL
-            unclipped_depth: false,
-            // Requires Features::CONSERVATIVE_RASTERIZATION
-            conservative: false,
-        },
-        depth_stencil: depth_format.map(|format| wgpu::DepthStencilState {
-            format,
-            depth_write_enabled: Some(alpha_mode != AlphaMode::Blend),
-            depth_compare: Some(wgpu::CompareFunction::Less),
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
-        multisample: wgpu::MultisampleState {
-            count: 1,
-            mask: !0,
-            alpha_to_coverage_enabled: false,
-        },
-        multiview_mask: None,
-        cache: None,
-    })
-}
 
 pub struct MaterialPipelines {
     // [alpha_mode][double_sided as usize]
@@ -121,8 +52,8 @@ impl MaterialPipelines {
     pub fn new(
         device: &wgpu::Device,
         shader: &wgpu::ShaderModule,
-        layout: &wgpu::PipelineLayout,
-        vertex_layouts: &[wgpu::VertexBufferLayout],
+        layout: &MaterialPipelineLayout,
+        vertex_layouts: &[Option<wgpu::VertexBufferLayout>],
         color_format: wgpu::TextureFormat,
     ) -> Self {
         let make = |mode: AlphaMode, double_sided: bool| {
@@ -155,8 +86,8 @@ impl MaterialPipelines {
     fn create(
         device: &wgpu::Device,
         shader: &wgpu::ShaderModule,
-        layout: &wgpu::PipelineLayout,
-        vertex_layouts: &[wgpu::VertexBufferLayout],
+        layout: &MaterialPipelineLayout,
+        vertex_layouts: &[Option<wgpu::VertexBufferLayout>],
         color_format: wgpu::TextureFormat,
         mode: AlphaMode,
         double_sided: bool,
@@ -176,7 +107,7 @@ impl MaterialPipelines {
 
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(&label),
-            layout: Some(layout),
+            layout: Some(layout.layout()),
             vertex: wgpu::VertexState {
                 module: shader,
                 entry_point: Some("vs_main"),
@@ -206,14 +137,14 @@ impl MaterialPipelines {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: Self::DEPTH_FORMAT,
-                depth_write_enabled: depth_write,
+                depth_write_enabled: Some(depth_write),
                 // Blend still tests against opaque depth, it just doesn't write.
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         })
     }

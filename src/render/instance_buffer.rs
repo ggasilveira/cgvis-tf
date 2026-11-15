@@ -1,16 +1,29 @@
 use crate::{
     math::Transform,
     render::{
+        asset_manager::AssetManager,
         bindgroup::{InstanceBufferBindGroup, InstanceBufferBindGroupLayout},
-        resources::{NodeKind, ResourceManager},
+        context::RenderContext,
+        model::NodeKind,
     },
 };
 
-use crate::render::resources::{MaterialHandle, MeshHandle, ModelHandle};
+use super::material::AlphaMode;
+use crate::render::asset_id::{MaterialId, MeshId, ModelId};
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy)]
+    pub struct AlphaModeMask: u8 {
+        const OPAQUE = 1 << 0;
+        const MASK   = 1 << 1;
+        const BLEND  = 1 << 2;
+        const SOLID  = Self::OPAQUE.bits() | Self::MASK.bits();
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Instance {
-    pub model: ModelHandle,
+    pub model: ModelId,
     pub transform: Transform,
 }
 impl Instance {
@@ -55,16 +68,18 @@ impl InstanceData {
 /// One draw call: `draw_indexed(.., 0, first..first + count)` for this mesh.
 #[derive(Clone, Copy, Debug)]
 pub struct Batch {
-    pub material: MaterialHandle,
-    pub mesh: MeshHandle,
+    pub material: MaterialId,
+    pub mesh: MeshId,
     pub first: u32,
     pub count: u32,
 }
 
 /// One thing to draw, produced by walking instances and their model nodes.
 pub struct DrawItem {
-    pub material: MaterialHandle,
-    pub mesh: MeshHandle,
+    pub alpha_mode: AlphaMode,
+    pub double_sided: bool,
+    pub material: MaterialId,
+    pub mesh: MeshId,
     pub world: Mat4,
 }
 
@@ -124,18 +139,16 @@ impl InstanceBuffer {
     }
 
     /// Sort the draw items, upload them, and rebuild the batch list.
-    pub fn rebuild(
+    pub fn update(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        context: &RenderContext,
         layout: &InstanceBufferBindGroupLayout,
         instances: &[Instance],
         resources: &ResourceManager,
     ) {
         self.collect_draws(instances, resources);
         // Material first, then mesh: fewer bind group switches while drawing.
-        self.draw_items
-            .sort_unstable_by_key(|i| (i.material, i.mesh));
+        self.draw_items.sort_unstable_by_key(|i| item_key(i));
 
         let mut data = Vec::with_capacity(self.draw_items.len());
         self.batches.clear();
@@ -157,13 +170,15 @@ impl InstanceBuffer {
         let needed = data.len() as u64;
         if needed > self.capacity {
             self.capacity = needed.next_power_of_two();
-            let (buffer, bind_group) = Self::create(device, layout, self.capacity);
+            let (buffer, bind_group) = Self::create(&context.device, layout, self.capacity);
             self.buffer = buffer;
             self.bind_group = bind_group;
         }
 
         if !data.is_empty() {
-            queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&data));
+            context
+                .queue
+                .write_buffer(&self.buffer, 0, bytemuck::cast_slice(&data));
         }
         self.dirty = false;
     }
@@ -178,9 +193,13 @@ impl InstanceBuffer {
                 if let NodeKind::Mesh(node_meshes) = &node.kind {
                     let world = instance.transform.mat4() * node.model_space;
                     for &mesh in node_meshes {
+                        let msh = resources.get_mesh(mesh);
+                        let mat = resources.get_material(msh.material);
                         self.draw_items.push(DrawItem {
-                            material: resources.get_mesh(mesh).material,
+                            material: msh.material,
                             mesh,
+                            alpha_mode: mat.alpha_mode,
+                            double_sided: mat.double_sided,
                             world,
                         });
                     }
@@ -190,7 +209,12 @@ impl InstanceBuffer {
     }
     /// Draw everything in one buffer. Call once for the static buffer and once
     /// for the dynamic one.
-    pub fn draw<'a>(&self, pass: &mut wgpu::RenderPass<'a>, resources: &ResourceManager) {
+    pub fn draw_range<'a>(
+        &self,
+        pass: &mut wgpu::RenderPass<'a>,
+        resources: &ResourceManager,
+        alpha_range: std::ops::RangeInclusive<AlphaMode>,
+    ) {
         pass.set_bind_group(2, self.bind_group(), &[]);
         let mut current_material = None;
         for batch in &self.batches {
@@ -245,3 +269,7 @@ impl InstanceBuffer {
 //         min_binding_size: None,
 //     },
 // ---------------------------------------------------------------------------
+
+fn item_key(item: &DrawItem) -> (AlphaMode, bool, MaterialHandle, MeshHandle) {
+    (item.alpha_mode, item.double_sided, item.material, item.mesh)
+}

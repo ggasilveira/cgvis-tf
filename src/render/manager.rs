@@ -1,12 +1,14 @@
+use super::pipeline::MaterialPipelines;
 use crate::render::bindgroup::{
     GlobalBindGroup, GlobalBindGroupLayout, InstanceBufferBindGroupLayout, MaterialBindGroupLayout,
 };
 use crate::render::buffer::Buffer;
 use crate::render::camera::Camera;
 use crate::render::context::RenderContext;
-use crate::render::instance::*;
+use crate::render::instance_buffer::*;
 use crate::render::light::Light;
 use crate::render::model;
+use crate::render::pipeline::MaterialPipelineLayout;
 use crate::render::resources::{AlphaMode, ResourceManager};
 use crate::render::texture;
 use crate::render::uniform::{CameraUniform, LightsUniform};
@@ -14,7 +16,7 @@ use model::Vertex;
 
 pub struct RenderManager {
     is_surface_configured: bool,
-    render_pipeline: wgpu::RenderPipeline,
+    pipelines: MaterialPipelines,
     camera_buffer: Buffer<CameraUniform>,
     depth_texture: texture::Texture,
     lights_uniform: LightsUniform,
@@ -45,7 +47,7 @@ impl RenderManager {
             &lights_buffer,
         );
 
-        let render_pipeline_layout = RenderPipelineLayout::new(
+        let material_pipeline_layout = MaterialPipelineLayout::new(
             &context.device,
             &global_bind_group_layout,
             &material_bind_group_layout,
@@ -54,21 +56,22 @@ impl RenderManager {
 
         let depth_texture = texture::Texture::create_depth_texture(context, "depth_texture");
 
-        let render_pipeline = {
-            let shader = wgpu::include_wgsl!("shader.wgsl");
-            create_render_pipeline(
+        let pipelines = {
+            let shader = context
+                .device
+                .create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+            MaterialPipelines::new(
                 &context.device,
-                &render_pipeline_layout,
-                context.config.format,
-                Some(texture::Texture::DEPTH_FORMAT),
+                &shader,
+                &material_pipeline_layout,
                 &[Some(model::ModelVertex::desc())],
-                shader,
+                context.config.format,
             )
         };
 
         Ok(Self {
             is_surface_configured: false,
-            render_pipeline,
+            pipelines,
             global_bg,
             camera_buffer,
             lights_uniform,
@@ -103,9 +106,8 @@ impl RenderManager {
         resources: &ResourceManager,
         instances: &[Instance],
     ) {
-        self.dyn_instance_buffer.rebuild(
-            &context.device,
-            &context.queue,
+        self.dyn_instance_buffer.update(
+            context,
             &self.instance_buffer_bind_group_layout,
             instances,
             resources,
@@ -117,9 +119,8 @@ impl RenderManager {
         resources: &ResourceManager,
         instances: &[Instance],
     ) {
-        self.static_instance_buffer.rebuild(
-            &context.device,
-            &context.queue,
+        self.static_instance_buffer.update(
+            context,
             &self.instance_buffer_bind_group_layout,
             instances,
             resources,

@@ -1,107 +1,30 @@
-use crate::render::bindgroup::{MaterialBindGroup, MaterialBindGroupLayout};
-use crate::render::buffer::Buffer;
-use crate::render::context::RenderContext;
-use crate::render::model::{self, ModelIndex, ModelVertex};
-use crate::render::texture::{CreateTextureArgs, Texture};
-use crate::render::uniform::MaterialUniform;
+use super::asset_id::*;
+use super::bindgroup::MaterialBindGroupLayout;
+use super::buffer::Buffer;
+use super::context::RenderContext;
+use super::material::{AlphaMode, Material};
+use super::model::{Mesh, Model, Node, NodeKind};
+use super::texture::{CreateTextureArgs, Texture};
+use super::uniform::MaterialUniform;
+use super::vertex::*;
 use anyhow::Context;
-use glam::{Mat4, Vec2, Vec3};
+use glam::{Vec2, Vec3};
 use std::collections::HashMap;
 use std::path::PathBuf;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct MeshHandle(usize);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct TextureHandle(usize);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct MaterialHandle(usize);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ModelHandle(usize);
-pub struct Mesh {
-    pub vertex_buffer: Buffer<[ModelVertex]>,
-    pub index_buffer: Buffer<[ModelIndex]>,
-    pub num_elements: u32,
-    pub material: MaterialHandle,
-}
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-pub enum AlphaMode {
-    Opaque,
-    Mask,
-    Blend,
-}
-pub struct Material {
-    pub base_color_texture: TextureHandle,
-    pub normal_texture: TextureHandle,
-    pub settings: MaterialUniform,
-    pub alpha_mode: AlphaMode,
-    pub bind_group: MaterialBindGroup,
-    pub uniform_buffer: Buffer<MaterialUniform>,
-}
-impl Material {
-    pub fn new(
-        ctx: &RenderContext,
-        resources: &ResourceManager,
-        layout: &MaterialBindGroupLayout,
-        settings: MaterialUniform,
-        alpha_mode: AlphaMode,
-        base_color_texture: TextureHandle,
-        normal_texture: TextureHandle,
-    ) -> Self {
-        let uniform_buffer = Buffer::new(&ctx.device, &settings);
-        let bind_group = MaterialBindGroup::new(
-            &ctx.device,
-            layout,
-            &uniform_buffer,
-            resources.get_texture(base_color_texture),
-            resources.get_texture(normal_texture),
-        );
-        Self {
-            base_color_texture,
-            normal_texture,
-            alpha_mode,
-            settings,
-            uniform_buffer,
-            bind_group,
-        }
-    }
-}
-pub struct Model {
-    pub nodes: Vec<Node>,
-    pub roots: Vec<usize>,
-}
-
-#[derive(Debug, Clone)]
-pub enum NodeKind {
-    Mesh(Vec<MeshHandle>),
-    Collider,
-    Empty,
-}
-pub struct Node {
-    pub name: String,
-    pub parent: Option<usize>,
-    pub children: Vec<usize>,
-    pub local: Mat4,       // relative from parent, straight from GLTF
-    pub model_space: Mat4, // precomputed, relative to model root
-    pub kind: NodeKind,
-}
-
-pub struct ResourceManager {
+pub struct AssetManager {
     textures: Vec<Texture>,
     materials: Vec<Material>,
     material_bind_group_layout: MaterialBindGroupLayout,
     meshes: Vec<Mesh>,
     models: Vec<Model>,
     res_path: PathBuf,
-    default_base_texture: TextureHandle,
-    default_normal_texture: TextureHandle,
-    default_material: MaterialHandle,
+    default_base_texture: TextureId,
+    default_normal_texture: TextureId,
+    default_material: MaterialId,
 }
-impl ResourceManager {
-    pub fn new(ctx: &RenderContext, resources_path: &str) -> anyhow::Result<Self> {
-        let p = PathBuf::from(resources_path);
+impl AssetManager {
+    pub fn new(ctx: &RenderContext, assets_path: &str) -> anyhow::Result<Self> {
+        let p = PathBuf::from(assets_path);
         assert!(p.is_dir(), "resources path must be a directory");
         let mut out = Self {
             textures: Vec::new(),
@@ -111,75 +34,67 @@ impl ResourceManager {
             meshes: Vec::new(),
             res_path: p,
             // we'll set these after
-            default_base_texture: TextureHandle(0),
-            default_normal_texture: TextureHandle(0),
-            default_material: MaterialHandle(0),
+            default_base_texture: TextureId(0),
+            default_normal_texture: TextureId(0),
+            default_material: MaterialId(0),
         };
-        out.default_base_texture =
-            out.create_color_texture(ctx, image::Rgb([255, 255, 255]), Texture::DEFAULT_ARGS)?;
+        out.default_base_texture = out.create_color_texture(
+            ctx,
+            image::Rgba([255, 255, 255, 255]),
+            Texture::DEFAULT_ARGS,
+        )?;
         out.default_normal_texture =
-            out.create_color_texture(ctx, image::Rgb([128, 128, 255]), Texture::NORMAL_ARGS)?;
+            out.create_color_texture(ctx, image::Rgba([128, 128, 255, 255]), Texture::NORMAL_ARGS)?;
         out.create_default_material(ctx);
         Ok(out)
     }
     fn create_color_texture(
         &mut self,
         ctx: &RenderContext,
-        color: image::Rgb<u8>,
+        color: image::Rgba<u8>,
         args: CreateTextureArgs,
-    ) -> anyhow::Result<TextureHandle> {
-        let img = image::ImageBuffer::from_pixel(1, 1, color);
-        let txt = Texture::from_image(ctx, &img.into(), args, None)?;
-        Ok(self.add_texture(txt))
+    ) -> anyhow::Result<TextureId> {
+        Ok(self.add_texture(Texture::create_color(ctx, color, args)?))
     }
-    fn create_default_material(&mut self, ctx: &RenderContext) -> MaterialHandle {
-        let settings = MaterialUniform {
-            base_color: [1.; 4],
-            metallic: 0.,
-            roughness: 1.,
-            normal_scale: 1.,
-            alpha_cutoff: 0.,
-        };
+    fn create_default_material(&mut self, ctx: &RenderContext) -> MaterialId {
         self.add_material(Material::new(
             ctx,
             self,
             &self.material_bind_group_layout,
-            settings,
+            Material::DEFAULT_SETTINGS,
             AlphaMode::Opaque,
+            false,
             self.default_base_texture,
             self.default_normal_texture,
         ))
     }
     /// Adds an already created texture to the manager
-    fn add_texture(&mut self, texture: Texture) -> TextureHandle {
+    fn add_texture(&mut self, texture: Texture) -> TextureId {
         self.textures.push(texture);
-        TextureHandle(self.textures.len() - 1)
+        TextureId(self.textures.len() - 1)
     }
-    fn add_mesh(&mut self, mesh: Mesh) -> MeshHandle {
+    fn add_mesh(&mut self, mesh: Mesh) -> MeshId {
         self.meshes.push(mesh);
-        MeshHandle(self.meshes.len() - 1)
+        MeshId(self.meshes.len() - 1)
     }
-    fn add_material(&mut self, material: Material) -> MaterialHandle {
+    fn add_material(&mut self, material: Material) -> MaterialId {
         self.materials.push(material);
-        MaterialHandle(self.materials.len() - 1)
+        MaterialId(self.materials.len() - 1)
     }
-    pub fn get_model(&self, handle: ModelHandle) -> &Model {
+    pub fn get_model(&self, handle: ModelId) -> &Model {
         &self.models[handle.0]
     }
-    pub fn get_material(&self, handle: MaterialHandle) -> &Material {
+    pub fn get_material(&self, handle: MaterialId) -> &Material {
         &self.materials[handle.0]
     }
-    pub fn get_texture(&self, handle: TextureHandle) -> &Texture {
+    pub fn get_texture(&self, handle: TextureId) -> &Texture {
         &self.textures[handle.0]
     }
-    pub fn get_mesh(&self, handle: MeshHandle) -> &Mesh {
+    pub fn get_mesh(&self, handle: MeshId) -> &Mesh {
         &self.meshes[handle.0]
     }
-    pub fn models(&self) -> impl Iterator<Item = (ModelHandle, &Model)> {
-        self.models
-            .iter()
-            .enumerate()
-            .map(|(i, m)| (ModelHandle(i), m))
+    pub fn models(&self) -> impl Iterator<Item = (ModelId, &Model)> {
+        self.models.iter().enumerate().map(|(i, m)| (ModelId(i), m))
     }
     /// Loads an image as a texture into the GPU and returns its handle.
     /// The filename must be relative to the resources path
@@ -188,7 +103,7 @@ impl ResourceManager {
         ctx: &RenderContext,
         filename: &str,
         args: CreateTextureArgs,
-    ) -> anyhow::Result<TextureHandle> {
+    ) -> anyhow::Result<TextureId> {
         let filepath = self.res_path.join(filename);
 
         let bytes = std::fs::read(filepath)?;
@@ -198,7 +113,7 @@ impl ResourceManager {
     fn gltf_primitive2mesh(
         &self,
         ctx: &RenderContext,
-        materials: &HashMap<usize, MaterialHandle>,
+        materials: &HashMap<usize, MaterialId>,
         buffers: &[gltf::buffer::Data],
         primitive: gltf::Primitive,
     ) -> anyhow::Result<Mesh> {
@@ -263,7 +178,7 @@ impl ResourceManager {
         node: gltf::Node,
         model_nodes: &mut Vec<Node>,
         parent: Option<usize>,
-        materials: &HashMap<usize, MaterialHandle>,
+        materials: &HashMap<usize, MaterialId>,
         buffers: &[gltf::buffer::Data],
     ) -> anyhow::Result<usize> {
         let mut meshes = Vec::new();
@@ -306,7 +221,7 @@ impl ResourceManager {
         &mut self,
         ctx: &RenderContext,
         filename: &str,
-    ) -> anyhow::Result<ModelHandle> {
+    ) -> anyhow::Result<ModelId> {
         let (document, buffers, images) = gltf::import(self.res_path.join(filename))?;
         let scene = document
             .default_scene()
@@ -349,6 +264,7 @@ impl ResourceManager {
                     (AlphaMode::Mask, material.alpha_cutoff().unwrap())
                 }
             };
+            let double_sided = material.double_sided();
             let settings = MaterialUniform {
                 base_color: pbr.base_color_factor(),
                 metallic: pbr.metallic_factor(),
@@ -362,6 +278,7 @@ impl ResourceManager {
                 &self.material_bind_group_layout,
                 settings,
                 alpha_mode,
+                double_sided,
                 base_color_texture,
                 normal_texture,
             );
@@ -383,11 +300,11 @@ impl ResourceManager {
         }
         let idx = self.models.len();
         self.models.push(model);
-        Ok(ModelHandle(idx))
+        Ok(ModelId(idx))
     }
 }
 
-fn build_normal_space(vertices: &mut [model::ModelVertex], indices: &[ModelIndex]) {
+fn build_normal_space(vertices: &mut [ModelVertex], indices: &[ModelIndex]) {
     let mut triangles_included = vec![0; vertices.len()];
     for c in indices.chunks(3) {
         let c0 = c[0].0 as usize;

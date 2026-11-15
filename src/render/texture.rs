@@ -38,6 +38,15 @@ impl Texture {
         format: Self::NORMAL_FORMAT,
     };
 
+    pub fn create_color(
+        ctx: &RenderContext,
+        color: image::Rgba<u8>,
+        args: CreateTextureArgs,
+    ) -> anyhow::Result<Self> {
+        let img = image::ImageBuffer::from_pixel(1, 1, color);
+        Self::from_image(ctx, &img.into(), args, None)
+    }
+
     pub fn create_depth_texture(ctx: &RenderContext, label: &str) -> Self {
         let size = wgpu::Extent3d {
             width: ctx.config.width.max(1),

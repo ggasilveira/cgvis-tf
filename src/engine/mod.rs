@@ -10,7 +10,7 @@ use crate::render::light::{DirectionalLight, Light};
 use std::time::Instant;
 
 use crate::render::context::RenderContext;
-use crate::render::instance::Instance;
+use crate::render::instance_buffer::Instance;
 use crate::render::pipeline::RenderState;
 use crate::render::resources::ResourceManager;
 pub use context::EngineContext;
