@@ -1,13 +1,17 @@
 use crate::render::uniform::{CameraUniform, LightsUniform, MaterialUniform};
 use crate::render::{buffer::Buffer, texture::Texture};
 
+pub const GLOBAL_GROUP: u32 = GlobalBindGroup::GROUP;
+pub const MATERIAL_GROUP: u32 = MaterialBindGroup::GROUP;
+pub const INSTANCES_GROUP: u32 = InstanceBufferBindGroup::GROUP;
+
 /// Bind group layout that gets updated once per material/mesh.
-/// group(1).
+/// group(2).
 pub struct MaterialBindGroupLayout {
     layout: wgpu::BindGroupLayout,
 }
 impl MaterialBindGroupLayout {
-    pub const GROUP: u32 = 1;
+    pub const GROUP: u32 = 2;
     pub fn descriptor() -> wgpu::BindGroupLayoutDescriptor<'static> {
         wgpu::BindGroupLayoutDescriptor {
             entries: &[
@@ -66,7 +70,7 @@ impl MaterialBindGroupLayout {
         &self.layout
     }
 }
-/// group(1)
+/// group(2)
 pub struct MaterialBindGroup {
     bind_group: wgpu::BindGroup,
 }
@@ -197,7 +201,7 @@ pub struct InstanceBufferBindGroupLayout {
     pub layout: wgpu::BindGroupLayout,
 }
 impl InstanceBufferBindGroupLayout {
-    pub const GROUP: u32 = 2;
+    pub const GROUP: u32 = 1;
     // Camera bind group layout. Will be in group 0
     pub fn descriptor() -> wgpu::BindGroupLayoutDescriptor<'static> {
         wgpu::BindGroupLayoutDescriptor {

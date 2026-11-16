@@ -13,7 +13,7 @@
 use crate::render::bindgroup::{
     GlobalBindGroupLayout, InstanceBufferBindGroupLayout, MaterialBindGroupLayout,
 };
-use crate::render::resources::AlphaMode;
+use crate::render::material::AlphaMode;
 
 pub struct MaterialPipelineLayout {
     layout: wgpu::PipelineLayout,
