@@ -1,0 +1,3 @@
+model = "models/house.glb"
+mobility = "static"
+colliders = "model"

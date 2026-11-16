@@ -1,0 +1,7 @@
+model = "models/shed.glb"
+mobility = "static"
+
+[[collider]]
+shape = "box"
+half_extents = [1, 1, 1.7]
+offset = 1

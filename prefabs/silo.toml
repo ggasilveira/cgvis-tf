@@ -1,0 +1,8 @@
+model = "models/silo.glb"
+mobility = "static"
+
+[[collider]]
+shape = "cylinder"
+radius = 2.36
+height = 11.14
+offset = [0.0, 5.12, 0.0]

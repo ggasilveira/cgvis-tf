@@ -1,0 +1,7 @@
+model = "models/spooky_tree.glb"
+mobility = "static"
+
+[[collider]]
+shape = "cylinder"
+radius = 0.5
+height = 14.6

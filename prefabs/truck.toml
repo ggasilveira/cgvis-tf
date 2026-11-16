@@ -1,0 +1,6 @@
+model = "models/truck.glb"
+mobility = "static"
+
+[[collider]]
+shape = "box"
+half_extents = [1.06, 1.07, 2.33]

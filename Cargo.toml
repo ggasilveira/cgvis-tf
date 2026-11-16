@@ -15,7 +15,6 @@ log = "0.4.34"
 pollster = "1.0.1"
 serde = { version = "1.0.229", features = ["derive"] }
 slotmap = "1.1.1"
-tobj = "4.0.5"
 toml = "1.2.1"
 wgpu = "30.0.1"
 winit = "0.30.13"

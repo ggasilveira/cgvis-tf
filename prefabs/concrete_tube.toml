@@ -1,0 +1,4 @@
+
+model = "models/concrete_tube.glb"
+mobility = "static"
+colliders = "model"

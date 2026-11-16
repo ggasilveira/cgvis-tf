@@ -1,0 +1,8 @@
+
+model = "models/tree3.glb"
+mobility = "static"
+
+[[collider]]
+shape = "cylinder"
+radius = 0.3
+height = 10.0

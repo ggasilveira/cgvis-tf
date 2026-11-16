@@ -1,0 +1,4 @@
+
+model = "models/oil_tank.glb"
+mobility = "static"
+colliders = "model"
