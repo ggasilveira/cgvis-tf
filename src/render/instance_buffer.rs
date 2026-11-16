@@ -1,18 +1,14 @@
-use std::ops::{Bound, RangeBounds};
-
-use crate::{
-    math::Transform,
-    render::{
-        asset_manager::AssetManager,
-        bindgroup::{InstanceBufferBindGroup, InstanceBufferBindGroupLayout},
-        context::RenderContext,
-        model::NodeKind,
-        pipeline::MaterialPipelines,
-    },
+use crate::render::{
+    asset_manager::AssetManager,
+    bindgroup::{InstanceBufferBindGroup, InstanceBufferBindGroupLayout},
+    context::RenderContext,
+    model::NodeKind,
+    pipeline::MaterialPipelines,
 };
 
 use super::material::AlphaMode;
-use crate::render::asset_id::{MaterialId, MeshId, ModelId};
+use super::scene::{Mobility, Scene};
+use crate::render::asset_id::{MaterialId, MeshId};
 
 bitflags::bitflags! {
     #[derive(Clone, Copy)]
@@ -21,27 +17,6 @@ bitflags::bitflags! {
         const MASK   = 1 << 1;
         const BLEND  = 1 << 2;
         const SOLID  = Self::OPAQUE.bits() | Self::MASK.bits();
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Instance {
-    pub model: ModelId,
-    pub transform: Transform,
-}
-impl Instance {
-    fn to_raw(&self) -> InstanceData {
-        let model = self.transform.mat4();
-        let normal = glam::Mat3::from_mat4(model).inverse().transpose();
-        let normal_padded = [
-            normal.x_axis.extend(0.).to_array(),
-            normal.y_axis.extend(0.).to_array(),
-            normal.z_axis.extend(0.).to_array(),
-        ];
-        InstanceData {
-            model: model.to_cols_array_2d(),
-            normal: normal_padded,
-        }
     }
 }
 
@@ -120,6 +95,12 @@ pub struct DrawItem {
     world: Mat4,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BufferKind {
+    Static,
+    Dynamic,
+}
+
 /// Global instance buffer: one GPU storage buffer holding the transform of every
 /// drawn (instance, mesh) pair, sorted so each mesh's entries are contiguous.
 /// `batches` is the "map": mesh -> range of entries to draw.
@@ -128,6 +109,7 @@ pub struct DrawItem {
 ///     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 ///     pub struct MeshHandle(pub u32);
 pub struct InstanceBuffer {
+    kind: BufferKind,
     buffer: wgpu::Buffer,
     bind_group: InstanceBufferBindGroup,
     capacity: u64, // in entries
@@ -145,6 +127,7 @@ impl InstanceBuffer {
     pub fn new(
         device: &wgpu::Device,
         layout: &InstanceBufferBindGroupLayout,
+        kind: BufferKind,
         capacity: u64,
     ) -> Self {
         let capacity = capacity.max(64);
@@ -157,6 +140,7 @@ impl InstanceBuffer {
             draw_items: Vec::new(),
             mode_offsets: [0; 4],
             dirty: true,
+            kind,
         }
     }
 
@@ -178,17 +162,23 @@ impl InstanceBuffer {
     pub fn bind_group(&self) -> &wgpu::BindGroup {
         self.bind_group.bind_group()
     }
+    fn belongs_here(&self, mobility: Mobility, mode: AlphaMode) -> bool {
+        match self.kind {
+            BufferKind::Static => mobility == Mobility::Static && mode != AlphaMode::Blend,
+            BufferKind::Dynamic => mobility == Mobility::Dynamic || mode == AlphaMode::Blend,
+        }
+    }
 
     /// Sort the draw items, upload them, and rebuild the batch list.
     pub fn update(
         &mut self,
         context: &RenderContext,
         layout: &InstanceBufferBindGroupLayout,
-        instances: &[Instance],
+        scene: &Scene,
         camera_pos: Vec3,
         assets: &AssetManager,
     ) {
-        self.collect_draws(instances, camera_pos, assets);
+        self.collect(scene, camera_pos, assets);
         self.upload(context, layout);
     }
 
@@ -248,63 +238,62 @@ impl InstanceBuffer {
         self.dirty = false;
     }
 
-    /// Walk every instance's mesh nodes. Node transforms are precomputed
-    /// (model_space), so this is a flat loop with no recursion.
-    fn collect_draws(&mut self, instances: &[Instance], camera_pos: Vec3, assets: &AssetManager) {
-        self.draw_items.clear();
-        for instance in instances {
+    // only collect the relevant instances from the scene for this type of buffer
+    fn collect(&mut self, scene: &Scene, camera_pos: Vec3, assets: &AssetManager) {
+        for instance in scene.instances.values() {
             let model = assets.get_model(instance.model);
-            for node in &model.nodes {
-                if let NodeKind::Mesh(node_meshes) = &node.kind {
-                    let world = instance.transform.mat4() * node.model_space;
-                    for &mesh in node_meshes {
-                        let msh = assets.get_mesh(mesh);
-                        let mat = assets.get_material(msh.material);
-                        let hint = if mat.alpha_mode == AlphaMode::Blend {
-                            SortHint::Distance((camera_pos - world.w_axis.truncate()).length())
-                        } else {
-                            SortHint::Material {
-                                material: msh.material,
-                                mesh,
-                            }
-                        };
-                        self.draw_items.push(DrawItem {
-                            key: SortKey::new(mat.alpha_mode, mat.double_sided, hint),
-                            material: msh.material,
-                            mesh,
-                            world,
-                        });
+
+            for (node_index, node) in model.nodes.iter().enumerate() {
+                let NodeKind::Mesh(meshes) = &node.kind else {
+                    continue;
+                };
+
+                // Animated instances use their own node transforms.
+                let model_space = match &instance.node_overrides {
+                    Some(overrides) => overrides[node_index],
+                    None => node.model_space,
+                };
+                let world = instance.transform * model_space;
+
+                for &mesh in meshes {
+                    let material_handle = assets.get_mesh(mesh).material;
+                    let material = assets.get_material(material_handle);
+
+                    if !self.belongs_here(instance.mobility, material.alpha_mode) {
+                        continue;
                     }
+
+                    let hint = if material.alpha_mode == AlphaMode::Blend {
+                        SortHint::Distance((camera_pos - world.w_axis.truncate()).length())
+                    } else {
+                        SortHint::Material {
+                            material: material_handle,
+                            mesh,
+                        }
+                    };
+
+                    self.draw_items.push(DrawItem {
+                        key: SortKey::new(material.alpha_mode, material.double_sided, hint),
+                        material: material_handle,
+                        mesh,
+                        world,
+                    });
                 }
             }
         }
     }
     /// Draw everything in one buffer. Call once for the static buffer and once
     /// for the dynamic one.
-    pub fn draw_range<'a>(
+    pub fn draw_mode<'a>(
         &self,
         pass: &mut wgpu::RenderPass<'a>,
         assets: &AssetManager,
         pipelines: &MaterialPipelines,
-        modes: impl RangeBounds<AlphaMode>,
+        mode: AlphaMode,
     ) {
         use super::bindgroup;
-        // Turn the range of modes into [first, end) mode indices.
-        let first = match modes.start_bound() {
-            Bound::Included(&m) => m as usize,
-            Bound::Excluded(&m) => m as usize + 1,
-            Bound::Unbounded => 0,
-        };
-        let end = match modes.end_bound() {
-            Bound::Included(&m) => m as usize + 1,
-            Bound::Excluded(&m) => m as usize,
-            Bound::Unbounded => 3,
-        };
-        if first >= end {
-            return; // empty range
-        }
-
-        let batches = &self.batches[self.mode_offsets[first]..self.mode_offsets[end]];
+        let m = mode as usize;
+        let batches = &self.batches[self.mode_offsets[m]..self.mode_offsets[m + 1]];
         if batches.is_empty() {
             return;
         }

@@ -66,7 +66,7 @@ var<uniform> camera: Camera;
 @group(0) @binding(1)
 var<uniform> lights: LightsUniform;
 
-@group(2) @binding(0)
+@group(1) @binding(0)
 var<storage, read> instances: array<InstanceData>;
 
 @vertex
@@ -94,15 +94,15 @@ fn vs_main(v: VertexInput, @builtin(instance_index) i: u32) -> VertexOutput {
     return out;
 }
 
-@group(1) @binding(0)
+@group(2) @binding(0)
 var t_diffuse: texture_2d<f32>;
-@group(1) @binding(1)
+@group(2) @binding(1)
 var s_diffuse: sampler;
-@group(1) @binding(2)
+@group(2) @binding(2)
 var t_normal: texture_2d<f32>;
-@group(1) @binding(3)
+@group(2) @binding(3)
 var s_normal: sampler;
-@group(1) @binding(4)
+@group(2) @binding(4)
 var<uniform> mat_settings: MaterialUniform;
 
 fn shade(in: VertexOutput) -> vec4<f32> {

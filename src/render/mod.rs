@@ -11,6 +11,7 @@ pub mod material;
 pub mod model;
 pub mod pipeline;
 pub mod scene;
+pub mod scene_renderer;
 pub mod texture;
 pub mod uniform;
 pub mod vertex;

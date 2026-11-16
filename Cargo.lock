@@ -2514,6 +2514,7 @@ dependencies = [
  "image",
  "log",
  "pollster",
+ "slotmap",
  "tobj",
  "toml",
  "wgpu",

@@ -2,19 +2,18 @@ mod api;
 mod context;
 mod input;
 mod object;
-mod scene;
 
 use crate::math::Transform;
 use crate::render::camera::Camera;
 use crate::render::light::{DirectionalLight, Light};
+use crate::render::manager::RenderManager;
+use crate::render::scene::{Instance, Scene};
 use std::time::Instant;
 
+use crate::render::asset_manager::AssetManager;
 use crate::render::context::RenderContext;
-use crate::render::instance_buffer::Instance;
-use crate::render::pipeline::RenderState;
-use crate::render::resources::ResourceManager;
 pub use context::EngineContext;
-use glam::{Quat, Vec2, Vec3};
+use glam::{Mat4, Quat, Vec2, Vec3};
 use input::Input;
 use winit::event::{KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
@@ -23,9 +22,9 @@ use winit::keyboard::PhysicalKey;
 pub struct Engine {
     context: RenderContext,
     input: Input,
-    render: RenderState,
-    resources: ResourceManager,
-    instances: Vec<Instance>,
+    render: RenderManager,
+    assets: AssetManager,
+    scene: Scene,
     last_frame: Instant,
     last_mouse: Vec2,
     curr_mouse: Vec2,
@@ -36,19 +35,19 @@ impl Engine {
     pub fn new(window: winit::window::Window) -> anyhow::Result<Self> {
         let context = RenderContext::new(window)?;
         let input = Input::new();
-        let mut render = RenderState::new(&context)?;
-        let mut resources = ResourceManager::new(&context, "assets")?;
+        let mut render = RenderManager::new(&context)?;
+        let mut assets = AssetManager::new(&context, "assets")?;
         let last_frame = Instant::now();
-        let mut instances = Vec::new();
-        instances.push(Instance {
-            model: resources.load_glb_model(&context, "models/tree1.glb")?,
-            transform: Transform {
-                position: Vec3::ZERO,
-                rotation: Quat::IDENTITY,
-                scale: Vec3::ONE,
-            },
+        let mut scene = Scene::new();
+        scene.instances.insert(Instance {
+            model: assets.load_glb_model(&context, "models/tree1.glb")?,
+            transform: Mat4::from_rotation_translation(Quat::IDENTITY, Vec3::ZERO),
+            bodies: Vec::new(),
+            mobility: crate::render::scene::Mobility::Static,
+            node_overrides: None,
         });
-        render.set_static_instances(&context, &resources, &instances);
+        //render.(&context, &resources, &instances);
+        render.scene_render.load_level(&context, &assets, &scene);
         let camera = Camera {
             eye: glam::Vec3::new(0.0, 1.0, 2.0),
             target: glam::Vec3::ZERO,
@@ -69,8 +68,8 @@ impl Engine {
             context,
             render,
             input,
-            resources,
-            instances,
+            assets,
+            scene,
             last_frame,
             last_mouse: Vec2::ZERO,
             curr_mouse: Vec2::ZERO,
@@ -93,7 +92,10 @@ impl Engine {
                 self.last_mouse = self.curr_mouse;
                 self.update(delta.as_secs_f32());
 
-                match self.render.render(&self.context, &self.resources) {
+                match self
+                    .render
+                    .render(&self.context, &self.assets, &self.scene, self.camera.eye)
+                {
                     Ok(_) => {}
                     Err(e) => {
                         log::error!("{e}");

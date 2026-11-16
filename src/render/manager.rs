@@ -1,29 +1,31 @@
+use glam::Vec3;
+
 use super::pipeline::MaterialPipelines;
+use super::vertex::*;
+use crate::render::asset_manager::AssetManager;
 use crate::render::bindgroup::{
     GlobalBindGroup, GlobalBindGroupLayout, InstanceBufferBindGroupLayout, MaterialBindGroupLayout,
 };
 use crate::render::buffer::Buffer;
 use crate::render::camera::Camera;
 use crate::render::context::RenderContext;
-use crate::render::instance_buffer::*;
 use crate::render::light::Light;
 use crate::render::model;
 use crate::render::pipeline::MaterialPipelineLayout;
-use crate::render::resources::{AlphaMode, ResourceManager};
+use crate::render::scene::Scene;
+use crate::render::scene_renderer::SceneRenderer;
 use crate::render::texture;
 use crate::render::uniform::{CameraUniform, LightsUniform};
-use model::Vertex;
+use crate::render::{instance_buffer::*, scene_renderer};
 
 pub struct RenderManager {
     is_surface_configured: bool,
-    pipelines: MaterialPipelines,
+    pub scene_render: SceneRenderer,
     camera_buffer: Buffer<CameraUniform>,
     depth_texture: texture::Texture,
     lights_uniform: LightsUniform,
     lights_buffer: Buffer<LightsUniform>,
     global_bg: GlobalBindGroup,
-    pub static_instance_buffer: InstanceBuffer,
-    pub dyn_instance_buffer: InstanceBuffer,
     instance_buffer_bind_group_layout: InstanceBufferBindGroupLayout,
 }
 
@@ -36,10 +38,6 @@ impl RenderManager {
         let material_bind_group_layout = MaterialBindGroupLayout::new(&context.device);
         let global_bind_group_layout = GlobalBindGroupLayout::new(&context.device);
         let instance_buffer_bind_group_layout = InstanceBufferBindGroupLayout::new(&context.device);
-        let dyn_instance_buffer =
-            InstanceBuffer::new(&context.device, &instance_buffer_bind_group_layout, 64);
-        let static_instance_buffer =
-            InstanceBuffer::new(&context.device, &instance_buffer_bind_group_layout, 64);
         let global_bg = GlobalBindGroup::new(
             &context.device,
             &global_bind_group_layout,
@@ -64,21 +62,20 @@ impl RenderManager {
                 &context.device,
                 &shader,
                 &material_pipeline_layout,
-                &[Some(model::ModelVertex::desc())],
+                &[Some(ModelVertex::desc())],
                 context.config.format,
             )
         };
+        let scene_render = SceneRenderer::new(context, pipelines);
 
         Ok(Self {
             is_surface_configured: false,
-            pipelines,
             global_bg,
             camera_buffer,
             lights_uniform,
             lights_buffer,
             depth_texture,
-            static_instance_buffer,
-            dyn_instance_buffer,
+            scene_render,
             instance_buffer_bind_group_layout,
         })
     }
@@ -100,37 +97,13 @@ impl RenderManager {
         self.lights_buffer
             .update(&context.queue, &self.lights_uniform);
     }
-    pub fn set_dynamic_instances(
-        &mut self,
-        context: &RenderContext,
-        resources: &ResourceManager,
-        instances: &[Instance],
-    ) {
-        self.dyn_instance_buffer.update(
-            context,
-            &self.instance_buffer_bind_group_layout,
-            instances,
-            resources,
-        );
-    }
-    pub fn set_static_instances(
-        &mut self,
-        context: &RenderContext,
-        resources: &ResourceManager,
-        instances: &[Instance],
-    ) {
-        self.static_instance_buffer.update(
-            context,
-            &self.instance_buffer_bind_group_layout,
-            instances,
-            resources,
-        );
-    }
 
     pub fn render(
         &mut self,
         context: &RenderContext,
-        resources: &ResourceManager,
+        assets: &AssetManager,
+        scene: &Scene,
+        camera_pos: Vec3,
     ) -> anyhow::Result<()> {
         context.window.request_redraw();
 
@@ -191,13 +164,10 @@ impl RenderManager {
             multiview_mask: None,
         });
 
-        render_pass.set_pipeline(&self.render_pipeline);
-
+        self.scene_render.update(context, assets, scene, camera_pos);
         render_pass.set_bind_group(GlobalBindGroup::GROUP, self.global_bg.bind_group(), &[]);
-
-        self.static_instance_buffer
-            .draw(&mut render_pass, resources);
-        self.dyn_instance_buffer.draw(&mut render_pass, resources);
+        self.scene_render.draw_solid(&mut render_pass, assets);
+        self.scene_render.draw_transparent(&mut render_pass, assets);
 
         drop(render_pass);
 

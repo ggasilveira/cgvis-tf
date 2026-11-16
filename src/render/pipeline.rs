@@ -25,13 +25,15 @@ impl MaterialPipelineLayout {
         material_layout: &MaterialBindGroupLayout,
         instance_buffer_layout: &InstanceBufferBindGroupLayout,
     ) -> Self {
+        let mut bind_groups = [None; 3];
+        bind_groups[GlobalBindGroupLayout::GROUP as usize] = Some(global_layout.layout());
+        bind_groups[InstanceBufferBindGroupLayout::GROUP as usize] =
+            Some(instance_buffer_layout.layout());
+        bind_groups[MaterialBindGroupLayout::GROUP as usize] = Some(material_layout.layout());
+
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Material pipeline layout"),
-            bind_group_layouts: &[
-                Some(global_layout.layout()),
-                Some(material_layout.layout()),
-                Some(instance_buffer_layout.layout()),
-            ],
+            bind_group_layouts: &bind_groups,
             immediate_size: 0,
         });
         Self { layout }
