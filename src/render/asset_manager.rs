@@ -78,6 +78,7 @@ impl AssetManager {
         MeshId(self.meshes.len() - 1)
     }
     fn add_material(&mut self, material: Material) -> MaterialId {
+        eprintln!("added material: {material:?}");
         self.materials.push(material);
         MaterialId(self.materials.len() - 1)
     }
@@ -261,7 +262,7 @@ impl AssetManager {
                 gltf::material::AlphaMode::Blend => (AlphaMode::Blend, 0.0),
                 gltf::material::AlphaMode::Opaque => (AlphaMode::Opaque, 0.0),
                 gltf::material::AlphaMode::Mask => {
-                    (AlphaMode::Mask, material.alpha_cutoff().unwrap())
+                    (AlphaMode::Mask, material.alpha_cutoff().unwrap_or(0.5))
                 }
             };
             let double_sided = material.double_sided();

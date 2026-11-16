@@ -12,6 +12,7 @@ pub enum AlphaMode {
     Blend = 2,
 }
 
+#[derive(Debug, Clone)]
 pub struct Material {
     pub base_color_texture: TextureId,
     pub normal_texture: TextureId,

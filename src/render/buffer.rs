@@ -13,6 +13,7 @@ pub trait Bufferable {
     fn usage(&self) -> wgpu::BufferUsages;
 }
 
+#[derive(Debug, Clone)]
 pub struct Buffer<T: Bufferable + ?Sized> {
     buffer: wgpu::Buffer,
     _phantom: PhantomData<T>,

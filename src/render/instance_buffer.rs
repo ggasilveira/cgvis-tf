@@ -240,6 +240,7 @@ impl InstanceBuffer {
 
     // only collect the relevant instances from the scene for this type of buffer
     fn collect(&mut self, scene: &Scene, camera_pos: Vec3, assets: &AssetManager) {
+        self.draw_items.clear();
         for instance in scene.instances.values() {
             let model = assets.get_model(instance.model);
 

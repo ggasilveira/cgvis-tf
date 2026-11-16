@@ -71,6 +71,7 @@ impl MaterialBindGroupLayout {
     }
 }
 /// group(2)
+#[derive(Debug, Clone)]
 pub struct MaterialBindGroup {
     bind_group: wgpu::BindGroup,
 }
