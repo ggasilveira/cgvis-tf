@@ -14,16 +14,13 @@ struct InstanceData {
     model: mat4x4<f32>,
     normal: mat3x3<f32>,
 }
-struct PointLight {
-    position: vec3<f32>,
-    color: vec3<f32>,
-}
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) tex_coords: vec2<f32>,
-    @location(1) tangent_position: vec3<f32>,
-    @location(2) tangent_light_position: vec3<f32>,
-    @location(3) tangent_view_position: vec3<f32>,
+    @location(1) world_position: vec3<f32>,
+    @location(2) world_normal: vec3<f32>,
+    @location(3) world_tangent: vec3<f32>,
+    @location(4) world_bitangent: vec3<f32>,
 }
 
 const LIGHT_DIR: u32 = 0;
@@ -48,8 +45,9 @@ struct Light {
     padding1: u32,
     padding2: u32,
 }
+const LIGHTS_MAX: u32 = 16; // uniform::LIGHTS_SIZE
 struct LightsUniform {
-    lights: array<Light, 16>,
+    lights: array<Light, LIGHTS_MAX>,
     size: u32,
 }
 struct MaterialUniform {
@@ -73,24 +71,16 @@ var<storage, read> instances: array<InstanceData>;
 fn vs_main(v: VertexInput, @builtin(instance_index) i: u32) -> VertexOutput {
     var out: VertexOutput;
     let inst = instances[i];
-    let world_normal = normalize(inst.normal * v.normal);
-    let world_tangent = normalize(inst.normal * v.tangent);
-    let world_bitangent = normalize(inst.normal * v.bitangent);
-    let tangent_matrix = transpose(
-            mat3x3<f32>(
-                world_tangent,
-                world_bitangent,
-                world_normal,
-            ),
-        );
-
     let world_position = inst.model * vec4<f32>(v.position, 1.0);
 
+    // Lighting happens in world space in the fragment shader, so every light
+    // can be evaluated there (a tangent-space light only fits one light).
     out.clip_position = camera.view_proj * world_position;
     out.tex_coords = v.tex_coords;
-    out.tangent_position = tangent_matrix * world_position.xyz;
-    out.tangent_view_position = tangent_matrix * camera.view_pos.xyz;
-    out.tangent_light_position = tangent_matrix * lights.lights[0].position;
+    out.world_position = world_position.xyz;
+    out.world_normal = inst.normal * v.normal;
+    out.world_tangent = inst.normal * v.tangent;
+    out.world_bitangent = inst.normal * v.bitangent;
     return out;
 }
 
@@ -105,38 +95,84 @@ var s_normal: sampler;
 @group(2) @binding(4)
 var<uniform> mat_settings: MaterialUniform;
 
-fn shade(in: VertexOutput) -> vec4<f32> {
-    let object_color: vec4<f32> = textureSample(t_diffuse, s_diffuse, in.tex_coords);
-    let object_normal: vec4<f32> = textureSample(t_normal, s_normal, in.tex_coords);
+const AMBIENT: vec3<f32> = vec3(0.5, 0.5, 0.5);
 
-    let ambient_strength = 0.5;
-    let light = lights.lights[0];
-    let ambient_color = vec3(1, 1, 1) * ambient_strength;
+// Direction towards the light and how much of it reaches `pos` (attenuation
+// and spot cone), for a light of any type.
+struct LightSample {
+    dir: vec3<f32>,
+    radiance: vec3<f32>,
+}
 
-    // create the lightning vectors
-    let tangent_normal = object_normal.xyz * 2.0 - 1.0;
-    let light_dir = normalize(in.tangent_light_position - in.tangent_position);
-    let view_dir = normalize(in.tangent_view_position - in.tangent_position);
-    let half_dir = normalize(view_dir + light_dir);
+fn sample_light(light: Light, pos: vec3<f32>) -> LightSample {
+    var out: LightSample;
+    if light.typ == LIGHT_DIR {
+        out.dir = normalize(-light.direction);
+        out.radiance = light.color * light.intensity;
+        return out;
+    }
+    let to_light = light.position - pos;
+    let dist2 = max(dot(to_light, to_light), 1e-4);
+    out.dir = to_light * inverseSqrt(dist2);
+    // inverse square falloff
+    var attenuation = light.intensity / dist2;
+    if light.typ == LIGHT_SPOT {
+        // angles are half-angles of the cone, in radians
+        let cos_angle = dot(-out.dir, normalize(light.direction));
+        attenuation *= smoothstep(cos(light.outer_angle), cos(light.inner_angle), cos_angle);
+    }
+    out.radiance = light.color * attenuation;
+    return out;
+}
 
-    let specular_strength = pow(max(dot(tangent_normal, half_dir), 0.0), 32.0);
-    let specular_color = light.color * specular_strength;
+// World-space normal from the vertex frame and the normal map.
+fn surface_normal(in: VertexOutput, front_facing: bool) -> vec3<f32> {
+    var tangent_normal = textureSample(t_normal, s_normal, in.tex_coords).xyz * 2.0 - 1.0;
+    tangent_normal = vec3(tangent_normal.xy * mat_settings.normal_scale, tangent_normal.z);
+    let tbn = mat3x3<f32>(
+        normalize(in.world_tangent),
+        normalize(in.world_bitangent),
+        normalize(in.world_normal),
+    );
+    let n = normalize(tbn * tangent_normal);
+    // back faces of double-sided materials (leaves) face the other way
+    return select(-n, n, front_facing);
+}
 
-    let diffuse_strength = max(dot(tangent_normal, light_dir), 0.0);
-    let diffuse_color = light.color * diffuse_strength;
+// Blinn-Phong driven by the glTF metallic/roughness parameters.
+fn shade(in: VertexOutput, front_facing: bool) -> vec4<f32> {
+    let albedo = textureSample(t_diffuse, s_diffuse, in.tex_coords) * mat_settings.base_color;
+    let n = surface_normal(in, front_facing);
+    let view_dir = normalize(camera.view_pos.xyz - in.world_position);
 
-    let result = (ambient_color + diffuse_color + specular_color) * object_color.xyz;
-    return vec4<f32>(result, object_color.a);
+    let metallic = clamp(mat_settings.metallic, 0.0, 1.0);
+    let roughness = clamp(mat_settings.roughness, 0.05, 1.0);
+    // Metals have no diffuse and tint their reflections; dielectrics reflect ~4%.
+    let diffuse_color = albedo.rgb * (1.0 - metallic);
+    let specular_color = mix(vec3(0.04), albedo.rgb, metallic);
+    // Rough surfaces get a wide, dim highlight; smooth ones a tight, bright one.
+    let shininess = 2.0 / (roughness * roughness * roughness * roughness) - 2.0;
+    let specular_norm = (shininess + 8.0) / 8.0;
+
+    var color = AMBIENT * albedo.rgb;
+    for (var i = 0u; i < min(lights.size, LIGHTS_MAX); i++) {
+        let light = sample_light(lights.lights[i], in.world_position);
+        let n_dot_l = max(dot(n, light.dir), 0.0);
+        let half_dir = normalize(view_dir + light.dir);
+        let specular = specular_color * specular_norm * pow(max(dot(n, half_dir), 0.0), shininess);
+        color += (diffuse_color + specular) * light.radiance * n_dot_l;
+    }
+    return vec4<f32>(color, albedo.a);
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return shade(in);
+fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+    return shade(in, front_facing);
 }
 
 @fragment
-fn fs_mask(in: VertexOutput) -> @location(0) vec4<f32> {
-    let color = shade(in);
+fn fs_mask(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+    let color = shade(in, front_facing);
     if color.a < mat_settings.alpha_cutoff {
         discard;
     }

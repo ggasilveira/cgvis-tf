@@ -45,6 +45,7 @@ pub struct Engine {
 impl Engine {
     pub fn new(window: winit::window::Window, setup: Setup) -> anyhow::Result<Self> {
         window.set_cursor_grab(winit::window::CursorGrabMode::Locked)?;
+        window.set_cursor_visible(false);
         let context = RenderContext::new(window)?;
         let render = RenderManager::new(&context)?;
         let assets = AssetManager::new(&context, "assets")?;

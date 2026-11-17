@@ -105,7 +105,7 @@ impl LightsUniform {
     pub fn new() -> Self {
         Self {
             lights: [LightUniform::default(); LIGHTS_SIZE],
-            size: LIGHTS_SIZE as u32,
+            size: 0,
             padding: [0; 3],
         }
     }

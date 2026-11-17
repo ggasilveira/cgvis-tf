@@ -20,7 +20,9 @@ pub struct SpotLight {
     pub direction: Vec3,
     pub color: Vec3,
     pub intensity: f32,
+    /// Half-angle in radians where the cone starts fading out.
     pub inner_angle: f32,
+    /// Half-angle in radians where the cone ends.
     pub outer_angle: f32,
 }
 impl SpotLight {}
