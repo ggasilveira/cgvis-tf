@@ -1,54 +1,51 @@
 mod api;
-mod context;
 mod input;
 mod level;
-mod object;
 
-use crate::math::Transform;
 use crate::render::camera::Camera;
 use crate::render::light::{DirectionalLight, Light};
 use crate::render::manager::RenderManager;
-use crate::render::scene::{Instance, Scene};
 use std::time::Instant;
 
 use crate::render::asset_manager::AssetManager;
 use crate::render::context::RenderContext;
-pub use context::EngineContext;
-use glam::{Mat4, Quat, Vec2, Vec3};
-use input::Input;
+pub use api::{Behaviour, Context, GameObject, GameObjectId, ObjectBuilder, Setup, Time};
+use api::{Phase, World};
+use glam::{Vec2, Vec3};
+pub use input::Input;
 use winit::event::{KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::PhysicalKey;
+
+/// Everything a game needs: `use slender::engine::prelude::*;`
+pub mod prelude {
+    pub use super::{Behaviour, Context, GameObject, GameObjectId, Input, Time};
+    pub use crate::math::Transform;
+    pub use crate::render::camera::Camera;
+    pub use crate::render::light::{DirectionalLight, Light, PointLight, SpotLight};
+    pub use crate::render::scene::Mobility;
+    pub use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
+    pub use winit::event::MouseButton;
+    pub use winit::keyboard::KeyCode;
+}
 
 pub struct Engine {
     context: RenderContext,
     input: Input,
     render: RenderManager,
     assets: AssetManager,
-    scene: Scene,
+    world: World,
+    time: Time,
+    quit: bool,
     last_frame: Instant,
     last_mouse: Vec2,
     curr_mouse: Vec2,
-    cam_ctl: CameraController,
-    camera: Camera,
 }
 impl Engine {
-    pub fn new(window: winit::window::Window) -> anyhow::Result<Self> {
+    pub fn new(window: winit::window::Window, setup: Setup) -> anyhow::Result<Self> {
         let context = RenderContext::new(window)?;
-        let input = Input::new();
-        let mut render = RenderManager::new(&context)?;
-        let mut assets = AssetManager::new(&context, "assets")?;
-        let last_frame = Instant::now();
-        let mut scene = Scene::new();
-        scene.instances.insert(Instance {
-            model: assets.load_glb_model(&context, "models/tree1.glb")?,
-            transform: Mat4::from_rotation_translation(Quat::IDENTITY, Vec3::ZERO),
-            bodies: Vec::new(),
-            mobility: crate::render::scene::Mobility::Static,
-            node_overrides: None,
-        });
-        //render.(&context, &resources, &instances);
-        render.scene_render.load_level(&context, &assets, &scene);
+        let render = RenderManager::new(&context)?;
+        let assets = AssetManager::new(&context, "assets")?;
         let camera = Camera {
             eye: glam::Vec3::new(0.0, 1.0, 2.0),
             target: glam::Vec3::ZERO,
@@ -57,46 +54,70 @@ impl Engine {
             znear: 0.1,
             zfar: 100.0,
         };
-        render.update_lights(
-            &context,
-            &[Light::Directional(DirectionalLight {
+        let mut world = World::new(camera, "prefabs");
+        world
+            .scene
+            .lights
+            .push(Light::Directional(DirectionalLight {
                 direction: Vec3::NEG_Y,
                 color: Vec3::new(1., 1., 1.),
                 intensity: 1.,
-            })],
-        );
-        Ok(Self {
+            }));
+        let mut engine = Self {
             context,
             render,
-            input,
+            input: Input::new(),
             assets,
-            scene,
-            last_frame,
+            world,
+            time: Time::default(),
+            quit: false,
+            last_frame: Instant::now(),
             last_mouse: Vec2::ZERO,
             curr_mouse: Vec2::ZERO,
-            cam_ctl: CameraController::new(1.),
-            camera,
-        })
+        };
+        setup(&mut Context {
+            world: &mut engine.world,
+            assets: &mut engine.assets,
+            gpu: &engine.context,
+            input: &engine.input,
+            time: engine.time,
+            this: None,
+            quit: &mut engine.quit,
+        })?;
+        engine.world.sync_transforms();
+        // Loading took a while; don't count it as the first frame's delta.
+        engine.last_frame = Instant::now();
+        Ok(engine)
     }
     pub fn handle_event(&mut self, event: WindowEvent, event_loop: &ActiveEventLoop) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 self.render
-                    .resize(&mut self.context, size.width, size.height)
+                    .resize(&mut self.context, size.width, size.height);
+                if size.height > 0 {
+                    self.world.camera.aspect = size.width as f32 / size.height as f32;
+                }
             }
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();
                 let delta = now - self.last_frame;
+                self.last_frame = now;
                 self.input
                     .set_mouse_delta(self.curr_mouse - self.last_mouse);
                 self.last_mouse = self.curr_mouse;
                 self.update(delta.as_secs_f32());
+                if self.quit {
+                    event_loop.exit();
+                    return;
+                }
 
-                match self
-                    .render
-                    .render(&self.context, &self.assets, &self.scene, self.camera.eye)
-                {
+                match self.render.render(
+                    &self.context,
+                    &self.assets,
+                    &self.world.scene,
+                    self.world.camera.eye,
+                ) {
                     Ok(_) => {}
                     Err(e) => {
                         log::error!("{e}");
@@ -115,74 +136,85 @@ impl Engine {
                 ..
             } => {
                 if state.is_pressed() {
-                    self.input.down_keys.insert(code);
+                    self.input.press_key(code);
                 } else {
-                    self.input.down_keys.remove(&code);
+                    self.input.release_key(code);
                 }
             }
-            WindowEvent::CursorMoved {
-                device_id,
-                position,
-            } => self.curr_mouse = Vec2::new(position.x as f32, position.y as f32),
-            WindowEvent::MouseInput {
-                device_id,
-                state,
-                button,
-            } => {
+            WindowEvent::CursorMoved { position, .. } => {
+                self.curr_mouse = Vec2::new(position.x as f32, position.y as f32)
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
                 if state.is_pressed() {
-                    self.input.down_mouse.insert(button);
+                    self.input.press_mouse(button);
                 } else {
-                    self.input.down_mouse.remove(&button);
+                    self.input.release_mouse(button);
                 }
             }
             _ => {}
         }
     }
     fn update(&mut self, delta: f32) {
-        self.cam_ctl.update_camera(&self.input, &mut self.camera);
-        self.render.update_camera(&self.context, &self.camera);
+        self.time.advance(delta);
+
+        let ids = self.world.object_ids();
+        for phase in [Phase::Start, Phase::Update, Phase::LateUpdate] {
+            for &id in &ids {
+                self.run_behaviours(id, phase);
+            }
+        }
+
+        // Destroying can destroy more objects (from on_destroy), so loop.
+        loop {
+            let pending = self.world.take_pending_destroy();
+            if pending.is_empty() {
+                break;
+            }
+            for id in pending {
+                self.run_behaviours(id, Phase::Destroy);
+                self.world.remove(id);
+            }
+        }
+
+        self.world.sync_transforms();
+        if self.world.static_dirty {
+            self.render
+                .scene_render
+                .load_level(&self.context, &self.assets, &self.world.scene);
+            self.world.static_dirty = false;
+        }
+        self.render.update_camera(&self.context, &self.world.camera);
+        self.render
+            .update_lights(&self.context, &self.world.scene.lights);
+        self.input.end_frame();
     }
-}
 
-pub struct CameraController {
-    speed: f32,
-}
-
-use winit::keyboard::KeyCode;
-impl CameraController {
-    pub fn new(speed: f32) -> Self {
-        Self { speed }
-    }
-
-    pub fn update_camera(&self, input: &Input, camera: &mut crate::render::camera::Camera) {
-        use glam::Vec3;
-        let forward = camera.target - camera.eye;
-        let forward_norm = forward.normalize();
-        let forward_mag = forward.length();
-
-        // Prevents glitching when the camera gets too close to the
-        // center of the scene.
-        if input.is_key_down(KeyCode::KeyW) && forward_mag > self.speed {
-            camera.eye += forward_norm * self.speed;
-        }
-        if input.is_key_down(KeyCode::KeyS) {
-            camera.eye -= forward_norm * self.speed;
-        }
-
-        let right = forward_norm.cross(Vec3::Y);
-
-        // Redo radius calc in case the forward/backward is pressed.
-        let forward = camera.target - camera.eye;
-        let forward_mag = forward.length();
-
-        if input.is_key_down(KeyCode::KeyD) {
-            // Rescale the distance between the target and the eye so
-            // that it doesn't change. The eye, therefore, still
-            // lies on the circle made by the target and eye.
-            camera.eye = camera.target - (forward + right * self.speed).normalize() * forward_mag;
-        }
-        if input.is_key_down(KeyCode::KeyA) {
-            camera.eye = camera.target - (forward - right * self.speed).normalize() * forward_mag;
+    /// Runs one lifecycle method on every behaviour of an object. Each
+    /// behaviour is taken out of the object while it runs so it can receive
+    /// a `&mut Context` that also reaches the object.
+    fn run_behaviours(&mut self, id: GameObjectId, phase: Phase) {
+        // The count is re-read so behaviours added during the loop are seen.
+        let mut index = 0;
+        while index < self.world.behaviour_count(id) {
+            if let Some(mut behaviour) = self.world.take_behaviour(id, index, phase) {
+                let mut ctx = Context {
+                    world: &mut self.world,
+                    assets: &mut self.assets,
+                    gpu: &self.context,
+                    input: &self.input,
+                    time: self.time,
+                    this: Some(id),
+                    quit: &mut self.quit,
+                };
+                match phase {
+                    Phase::Start => behaviour.start(&mut ctx),
+                    Phase::Update => behaviour.update(&mut ctx),
+                    Phase::LateUpdate => behaviour.late_update(&mut ctx),
+                    Phase::Destroy => behaviour.on_destroy(&mut ctx),
+                }
+                self.world.put_behaviour(id, index, behaviour);
+            }
+            index += 1;
         }
     }
 }

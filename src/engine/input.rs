@@ -40,4 +40,25 @@ impl Input {
     pub fn set_mouse_delta(&mut self, delta: Vec2) {
         self.mouse_delta = delta;
     }
+    pub fn press_key(&mut self, key: KeyCode) {
+        if self.down_keys.insert(key) {
+            self.clicked_keys.insert(key);
+        }
+    }
+    pub fn release_key(&mut self, key: KeyCode) {
+        self.down_keys.remove(&key);
+    }
+    pub fn press_mouse(&mut self, button: MouseButton) {
+        if self.down_mouse.insert(button) {
+            self.clicked_mouse.insert(button);
+        }
+    }
+    pub fn release_mouse(&mut self, button: MouseButton) {
+        self.down_mouse.remove(&button);
+    }
+    /// Clears the per-frame state ("clicked" means "pressed this frame").
+    pub fn end_frame(&mut self) {
+        self.clicked_keys.clear();
+        self.clicked_mouse.clear();
+    }
 }

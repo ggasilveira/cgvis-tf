@@ -1,69 +1,57 @@
-use crate::engine::EngineContext;
-use glam::prelude::*;
-use winit::keyboard::KeyCode;
+use crate::engine::prelude::*;
 
 pub struct Player {
-    position: Vec3,
     pitch: f32,
     yaw: f32,
     speed: f32,
+    /// Radians per pixel of mouse movement.
+    sensitivity: f32,
 }
 impl Player {
     pub fn new() -> Self {
         Self {
-            position: Vec3::ZERO,
             pitch: 0.0,
             yaw: 0.0,
-            speed: 1.0,
+            speed: 4.0,
+            sensitivity: 0.005,
         }
     }
     pub fn look_direction(&self) -> Vec3 {
         Mat3::from_rotation_y(self.yaw) * Mat3::from_rotation_x(self.pitch) * Vec3::Z
     }
-    pub fn update(&mut self, ctx: &EngineContext, delta: f32) {
+}
+impl Behaviour for Player {
+    fn update(&mut self, ctx: &mut Context) {
         let input = ctx.input();
-        let mut dir = Vec2::ZERO;
-        if input.is_key_down(KeyCode::KeyW) {
-            dir.y += 1.;
-        }
-        if input.is_key_down(KeyCode::KeyA) {
-            dir.x -= 1.;
-        }
-        if input.is_key_down(KeyCode::KeyS) {
-            dir.y -= 1.;
-        }
-        if input.is_key_down(KeyCode::KeyD) {
-            dir.x += 1.;
-        }
-        if input.is_key_down(KeyCode::Space) {
-            self.position.y += delta;
-        }
-        if input.is_key_down(KeyCode::ControlLeft) {
-            self.position.y -= delta;
-        }
-        if input.is_key_down(KeyCode::ShiftLeft) {
-            self.speed = 1.5;
-        } else {
-            self.speed = 1.0;
-        }
+        let delta = ctx.time().delta;
 
-        let updown =
-            input.is_key_down(KeyCode::Space) as i8 - input.is_key_down(KeyCode::ControlLeft) as i8;
-
-        let forward2d = Vec2::Y.rotate_angle(self.yaw);
-        let right2d = forward2d.rotate_angle(-90.0f32.to_radians());
-        let dir = (forward2d * dir.y + right2d * dir.x).normalize();
-        let mut pos2d = self.position.xy();
-        pos2d += dir * delta * self.speed;
-
-        self.position.x = pos2d.x;
-        self.position.z = pos2d.y;
-        self.position.y = updown as f32 * delta * self.speed;
-        self.yaw += input.mouse_delta().x * delta;
-        while self.yaw > std::f32::consts::PI * 2.0 {
-            self.yaw -= std::f32::consts::PI * 2.0;
-        }
-        self.pitch += input.mouse_delta().y * delta;
+        // Mouse deltas are already per frame, so they aren't scaled by delta.
+        self.yaw -= input.mouse_delta().x * self.sensitivity;
+        self.yaw = self.yaw.rem_euclid(std::f32::consts::TAU);
+        self.pitch += input.mouse_delta().y * self.sensitivity;
         self.pitch = self.pitch.clamp(-80f32.to_radians(), 80f32.to_radians());
+
+        let forward = Vec3::new(self.yaw.sin(), 0.0, self.yaw.cos());
+        let right = forward.cross(Vec3::Y);
+        let axis = |pos, neg| input.is_key_down(pos) as i8 as f32 - input.is_key_down(neg) as i8 as f32;
+        let dir = forward * axis(KeyCode::KeyW, KeyCode::KeyS)
+            + right * axis(KeyCode::KeyD, KeyCode::KeyA)
+            + Vec3::Y * axis(KeyCode::Space, KeyCode::ControlLeft);
+        let speed = if input.is_key_down(KeyCode::ShiftLeft) {
+            self.speed * 1.5
+        } else {
+            self.speed
+        };
+
+        let position = {
+            let transform = ctx.transform_mut();
+            transform.position += dir.normalize_or_zero() * speed * delta;
+            transform.rotation = Quat::from_rotation_y(self.yaw);
+            transform.position
+        };
+        let look = self.look_direction();
+        let camera = ctx.camera_mut();
+        camera.eye = position;
+        camera.target = position + look;
     }
 }

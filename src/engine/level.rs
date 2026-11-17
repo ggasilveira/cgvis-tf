@@ -93,20 +93,17 @@ pub enum Interact {
 }
 
 impl PrefabDef {
-    pub fn load(path: &std::path::Path) -> Result<Self, String> {
-        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let def: Self = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-        def.validate()
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+    pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
+        let text = std::fs::read_to_string(path)?;
+        let def: Self = toml::from_str(&text)?;
+        def.validate()?;
         Ok(def)
     }
 
     /// Rules serde can't express on its own.
-    fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> anyhow::Result<()> {
         if self.colliders.is_some() && !self.collider_defs.is_empty() {
-            return Err(
-                "use either `colliders = \"model\"` or [[collider]] tables, not both".into(),
-            );
+            anyhow::bail!("use either `colliders = \"model\"` or [[collider]] tables, not both");
         }
         Ok(())
     }
