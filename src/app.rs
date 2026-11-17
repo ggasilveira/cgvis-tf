@@ -53,6 +53,17 @@ impl ApplicationHandler<()> for App {
         let Some(engine) = &mut self.engine else {
             return;
         };
-        engine.handle_event(event, event_loop);
+        engine.window_event(event, event_loop);
+    }
+    fn device_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        device_id: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        let Some(engine) = &mut self.engine else {
+            return;
+        };
+        engine.device_event(device_id, event, event_loop);
     }
 }

@@ -98,17 +98,19 @@ impl Texture {
         args: CreateTextureArgs,
         label: Option<&str>,
     ) -> Result<Self> {
-        let rgba = img.to_rgba8();
+        let mut rgba = img.to_rgba8();
         let dimensions = img.dimensions();
         let size = wgpu::Extent3d {
             width: dimensions.0,
             height: dimensions.1,
             depth_or_array_layers: 1,
         };
+        // Full mip chain down to 1x1, so distant surfaces don't alias.
+        let mip_level_count = size.max_mips(wgpu::TextureDimension::D2);
 
         let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
             size,
-            mip_level_count: 1,
+            mip_level_count,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: args.format,
@@ -116,21 +118,37 @@ impl Texture {
             label,
             view_formats: &[],
         });
-        ctx.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &rgba,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * dimensions.0),
-                rows_per_image: Some(dimensions.1),
-            },
-            size,
-        );
+        for mip_level in 0..mip_level_count {
+            if mip_level > 0 {
+                let (width, height) = rgba.dimensions();
+                rgba = image::imageops::resize(
+                    &rgba,
+                    (width / 2).max(1),
+                    (height / 2).max(1),
+                    image::imageops::FilterType::Triangle,
+                );
+            }
+            let (width, height) = rgba.dimensions();
+            ctx.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * width),
+                    rows_per_image: Some(height),
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = ctx.device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: args.repeat_mode_horizontal,
@@ -139,6 +157,8 @@ impl Texture {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            // sharper textures on surfaces seen at a grazing angle (the ground)
+            anisotropy_clamp: 16,
             ..Default::default()
         });
         Ok(Self {

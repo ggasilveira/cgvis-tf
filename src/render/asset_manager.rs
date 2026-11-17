@@ -78,7 +78,6 @@ impl AssetManager {
         MeshId(self.meshes.len() - 1)
     }
     fn add_material(&mut self, material: Material) -> MaterialId {
-        eprintln!("added material: {material:?}");
         self.materials.push(material);
         MaterialId(self.materials.len() - 1)
     }
@@ -189,24 +188,26 @@ impl AssetManager {
             .unwrap_or_else(|| format!("node_{node_index}"));
 
         let local = glam::Mat4::from_cols_array_2d(&node.transform().matrix());
-        let model_space = parent.map_or(glam::Mat4::IDENTITY, |p| model_nodes[p].model_space) * local;
+        let model_space =
+            parent.map_or(glam::Mat4::IDENTITY, |p| model_nodes[p].model_space) * local;
 
-        let kind = match node.mesh() {
-            None => NodeKind::Empty,
-            Some(mesh) if node_name.starts_with("COL_") => {
-                NodeKind::Collider(collider_walls(mesh, buffers, model_space)?)
-            }
-            Some(mesh) => {
-                let mut meshes = Vec::new();
-                // a GLTF primitive is our mesh, and a gltf mesh is our model
-                for primitive in mesh.primitives() {
-                    meshes.push(self.add_mesh(
-                        self.gltf_primitive2mesh(ctx, materials, buffers, primitive)?,
-                    ));
+        let kind =
+            match node.mesh() {
+                None => NodeKind::Empty,
+                Some(mesh) if node_name.starts_with("COL_") => {
+                    NodeKind::Collider(collider_walls(mesh, buffers, model_space)?)
                 }
-                NodeKind::Mesh(meshes)
-            }
-        };
+                Some(mesh) => {
+                    let mut meshes = Vec::new();
+                    // a GLTF primitive is our mesh, and a gltf mesh is our model
+                    for primitive in mesh.primitives() {
+                        meshes.push(self.add_mesh(
+                            self.gltf_primitive2mesh(ctx, materials, buffers, primitive)?,
+                        ));
+                    }
+                    NodeKind::Mesh(meshes)
+                }
+            };
         model_nodes.push(Node {
             name: node_name,
             parent,

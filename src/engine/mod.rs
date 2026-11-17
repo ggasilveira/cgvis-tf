@@ -13,7 +13,7 @@ pub use api::{Behaviour, Context, GameObject, GameObjectId, ObjectBuilder, Setup
 use api::{Phase, World};
 use glam::{Vec2, Vec3};
 pub use input::Input;
-use winit::event::{KeyEvent, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::PhysicalKey;
 
@@ -40,11 +40,11 @@ pub struct Engine {
     time: Time,
     quit: bool,
     last_frame: Instant,
-    last_mouse: Vec2,
-    curr_mouse: Vec2,
+    mouse_delta: Vec2,
 }
 impl Engine {
     pub fn new(window: winit::window::Window, setup: Setup) -> anyhow::Result<Self> {
+        window.set_cursor_grab(winit::window::CursorGrabMode::Locked)?;
         let context = RenderContext::new(window)?;
         let render = RenderManager::new(&context)?;
         let assets = AssetManager::new(&context, "assets")?;
@@ -74,8 +74,7 @@ impl Engine {
             time: Time::default(),
             quit: false,
             last_frame: Instant::now(),
-            last_mouse: Vec2::ZERO,
-            curr_mouse: Vec2::ZERO,
+            mouse_delta: Vec2::ZERO,
         };
         setup(&mut Context {
             world: &mut engine.world,
@@ -91,7 +90,18 @@ impl Engine {
         engine.last_frame = Instant::now();
         Ok(engine)
     }
-    pub fn handle_event(&mut self, event: WindowEvent, event_loop: &ActiveEventLoop) {
+    pub fn device_event(
+        &mut self,
+        device_id: DeviceId,
+        event: DeviceEvent,
+        event_loop: &ActiveEventLoop,
+    ) {
+        if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
+            self.mouse_delta.x += dx as f32;
+            self.mouse_delta.y += dy as f32;
+        }
+    }
+    pub fn window_event(&mut self, event: WindowEvent, event_loop: &ActiveEventLoop) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
@@ -105,9 +115,8 @@ impl Engine {
                 let now = Instant::now();
                 let delta = now - self.last_frame;
                 self.last_frame = now;
-                self.input
-                    .set_mouse_delta(self.curr_mouse - self.last_mouse);
-                self.last_mouse = self.curr_mouse;
+                self.input.set_mouse_delta(self.mouse_delta);
+                self.mouse_delta = Vec2::ZERO;
                 self.update(delta.as_secs_f32());
                 if self.quit {
                     event_loop.exit();
@@ -142,9 +151,6 @@ impl Engine {
                 } else {
                     self.input.release_key(code);
                 }
-            }
-            WindowEvent::CursorMoved { position, .. } => {
-                self.curr_mouse = Vec2::new(position.x as f32, position.y as f32)
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 if state.is_pressed() {
