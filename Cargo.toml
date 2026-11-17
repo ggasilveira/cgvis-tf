@@ -18,3 +18,11 @@ slotmap = "1.1.1"
 toml = "1.2.1"
 wgpu = "30.0.1"
 winit = "0.30.13"
+
+# Debug builds load ~10x slower unoptimized (image decoding, mipmap generation).
+# Light optimization for our crate keeps it debuggable; dependencies get full.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
