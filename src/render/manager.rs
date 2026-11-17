@@ -14,6 +14,7 @@ use crate::render::model;
 use crate::render::pipeline::MaterialPipelineLayout;
 use crate::render::scene::Scene;
 use crate::render::scene_renderer::SceneRenderer;
+use crate::render::skybox::Skybox;
 use crate::render::texture;
 use crate::render::uniform::{CameraUniform, LightsUniform};
 use crate::render::{instance_buffer::*, scene_renderer};
@@ -21,6 +22,7 @@ use crate::render::{instance_buffer::*, scene_renderer};
 pub struct RenderManager {
     is_surface_configured: bool,
     pub scene_render: SceneRenderer,
+    skybox: Skybox,
     camera_buffer: Buffer<CameraUniform>,
     depth_texture: texture::Texture,
     lights_uniform: LightsUniform,
@@ -57,7 +59,10 @@ impl RenderManager {
         let pipelines = {
             let shader = context
                 .device
-                .create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("material shader"),
+                    source: crate::render::shader_source(include_str!("shader.wgsl")),
+                });
             MaterialPipelines::new(
                 &context.device,
                 &shader,
@@ -67,6 +72,11 @@ impl RenderManager {
             )
         };
         let scene_render = SceneRenderer::new(context, pipelines);
+        let skybox = Skybox::new(
+            &context.device,
+            &global_bind_group_layout,
+            context.config.format,
+        );
 
         Ok(Self {
             is_surface_configured: false,
@@ -76,6 +86,7 @@ impl RenderManager {
             lights_buffer,
             depth_texture,
             scene_render,
+            skybox,
             instance_buffer_bind_group_layout,
         })
     }
@@ -143,9 +154,9 @@ impl RenderManager {
                 depth_slice: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.1,
-                        g: 0.2,
-                        b: 0.3,
+                        r: 0.0,
+                        g: 0.0,
+                        b: 0.0,
                         a: 1.0,
                     }),
                     store: wgpu::StoreOp::Store,
@@ -167,6 +178,7 @@ impl RenderManager {
         self.scene_render.update(context, assets, scene, camera_pos);
         render_pass.set_bind_group(GlobalBindGroup::GROUP, self.global_bg.bind_group(), &[]);
         self.scene_render.draw_solid(&mut render_pass, assets);
+        self.skybox.draw(&mut render_pass);
         self.scene_render.draw_transparent(&mut render_pass, assets);
 
         drop(render_pass);

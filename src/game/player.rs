@@ -24,6 +24,17 @@ impl Player {
     }
 }
 impl Behaviour for Player {
+    fn start(&mut self, ctx: &mut Context) {
+        let t = ctx.transform().clone();
+        ctx.lights_mut().push(Light::Spot(SpotLight {
+            position: t.position,
+            direction: self.look_direction(),
+            color: Vec3::ONE,
+            intensity: 5.0,
+            inner_angle: 5f32.to_radians(),
+            outer_angle: 20f32.to_radians(),
+        }))
+    }
     fn update(&mut self, ctx: &mut Context) {
         let input = ctx.input();
         let delta = ctx.time().delta;
@@ -36,7 +47,8 @@ impl Behaviour for Player {
 
         let forward = Vec3::new(self.yaw.sin(), 0.0, self.yaw.cos());
         let right = forward.cross(Vec3::Y);
-        let axis = |pos, neg| input.is_key_down(pos) as i8 as f32 - input.is_key_down(neg) as i8 as f32;
+        let axis =
+            |pos, neg| input.is_key_down(pos) as i8 as f32 - input.is_key_down(neg) as i8 as f32;
         let dir = forward * axis(KeyCode::KeyW, KeyCode::KeyS)
             + right * axis(KeyCode::KeyD, KeyCode::KeyA)
             + Vec3::Y * axis(KeyCode::Space, KeyCode::ControlLeft);
@@ -62,5 +74,9 @@ impl Behaviour for Player {
         let camera = ctx.camera_mut();
         camera.eye = position;
         camera.target = position + look;
+        if let Light::Spot(l) = &mut ctx.lights_mut()[0] {
+            l.direction = look;
+            l.position = position;
+        }
     }
 }

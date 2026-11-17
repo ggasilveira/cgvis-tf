@@ -1,7 +1,4 @@
-struct Camera {
-    view_pos: vec4<f32>,
-    view_proj: mat4x4<f32>,
-}
+// `common.wgsl` is prepended: camera, sky_color, apply_fog.
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -58,9 +55,6 @@ struct MaterialUniform {
     alpha_cutoff: f32,
 }
 
-@group(0) @binding(0)
-var<uniform> camera: Camera;
-
 @group(0) @binding(1)
 var<uniform> lights: LightsUniform;
 
@@ -95,7 +89,7 @@ var s_normal: sampler;
 @group(2) @binding(4)
 var<uniform> mat_settings: MaterialUniform;
 
-const AMBIENT: vec3<f32> = vec3(0.5, 0.5, 0.5);
+const AMBIENT: vec3<f32> = vec3(0.0);
 
 // Direction towards the light and how much of it reaches `pos` (attenuation
 // and spot cone), for a light of any type.
@@ -130,10 +124,10 @@ fn surface_normal(in: VertexOutput, front_facing: bool) -> vec3<f32> {
     var tangent_normal = textureSample(t_normal, s_normal, in.tex_coords).xyz * 2.0 - 1.0;
     tangent_normal = vec3(tangent_normal.xy * mat_settings.normal_scale, tangent_normal.z);
     let tbn = mat3x3<f32>(
-        normalize(in.world_tangent),
-        normalize(in.world_bitangent),
-        normalize(in.world_normal),
-    );
+            normalize(in.world_tangent),
+            normalize(in.world_bitangent),
+            normalize(in.world_normal),
+        );
     let n = normalize(tbn * tangent_normal);
     // back faces of double-sided materials (leaves) face the other way
     return select(-n, n, front_facing);
@@ -155,14 +149,14 @@ fn shade(in: VertexOutput, front_facing: bool) -> vec4<f32> {
     let specular_norm = (shininess + 8.0) / 8.0;
 
     var color = AMBIENT * albedo.rgb;
-    for (var i = 0u; i < min(lights.size, LIGHTS_MAX); i++) {
+    for(var i = 0u; i < min(lights.size, LIGHTS_MAX); i++) {
         let light = sample_light(lights.lights[i], in.world_position);
         let n_dot_l = max(dot(n, light.dir), 0.0);
         let half_dir = normalize(view_dir + light.dir);
         let specular = specular_color * specular_norm * pow(max(dot(n, half_dir), 0.0), shininess);
         color += (diffuse_color + specular) * light.radiance * n_dot_l;
     }
-    return vec4<f32>(color, albedo.a);
+    return vec4<f32>(apply_fog(color, in.world_position), albedo.a);
 }
 
 @fragment

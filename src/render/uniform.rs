@@ -6,24 +6,27 @@ use crate::render::light::{DirectionalLight, Light, PointLight, SpotLight};
 pub struct CameraUniform {
     view_position: [f32; 4],
     view_proj: [[f32; 4]; 4],
+    inv_view_proj: [[f32; 4]; 4],
 }
 impl CameraUniform {
     pub fn new() -> Self {
         Self {
             view_position: [0.; 4],
             view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
+            inv_view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
         }
     }
     pub fn from_camera(cam: &Camera) -> Self {
-        Self {
-            view_position: cam.eye.extend(1.).to_array(),
-            view_proj: cam.build_matrix().to_cols_array_2d(),
-        }
+        let mut out = Self::new();
+        out.update(cam);
+        out
     }
     pub fn update(&mut self, cam: &Camera) {
         // change this to `rows` if the uniform is row major
+        let view_proj = cam.build_matrix();
         self.view_position = cam.eye.extend(1.).to_array();
-        self.view_proj = cam.build_matrix().to_cols_array_2d();
+        self.view_proj = view_proj.to_cols_array_2d();
+        self.inv_view_proj = view_proj.inverse().to_cols_array_2d();
     }
 }
 

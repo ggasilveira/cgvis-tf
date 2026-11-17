@@ -12,6 +12,12 @@ pub mod model;
 pub mod pipeline;
 pub mod scene;
 pub mod scene_renderer;
+pub mod skybox;
 pub mod texture;
 pub mod uniform;
 pub mod vertex;
+
+/// WGSL has no includes: prepends the shared definitions (camera, sky, fog).
+pub fn shader_source(source: &str) -> wgpu::ShaderSource<'static> {
+    wgpu::ShaderSource::Wgsl(format!("{}\n{}", include_str!("common.wgsl"), source).into())
+}

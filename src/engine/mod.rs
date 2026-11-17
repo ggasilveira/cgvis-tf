@@ -55,17 +55,17 @@ impl Engine {
             aspect: context.config.width as f32 / context.config.height as f32,
             fovy: 45.0,
             znear: 0.1,
-            zfar: 100.0,
+            zfar: 1000.0,
         };
         let mut world = World::new(camera, "prefabs");
-        world
-            .scene
-            .lights
-            .push(Light::Directional(DirectionalLight {
-                direction: Vec3::NEG_Y,
-                color: Vec3::new(1., 1., 1.),
-                intensity: 1.,
-            }));
+        // world
+        //     .scene
+        //     .lights
+        //     .push(Light::Directional(DirectionalLight {
+        //         direction: Vec3::NEG_Y,
+        //         color: Vec3::new(1., 1., 1.),
+        //         intensity: 1.,
+        //     }));
         let mut engine = Self {
             context,
             render,
