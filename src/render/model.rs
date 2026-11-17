@@ -1,7 +1,7 @@
 use super::asset_id::{MaterialId, MeshId};
 use super::buffer::Buffer;
 use super::vertex::*;
-use glam::Mat4;
+use glam::{Mat4, Vec3};
 
 pub struct Mesh {
     pub vertex_buffer: Buffer<[ModelVertex]>,
@@ -18,7 +18,9 @@ pub struct Model {
 #[derive(Debug, Clone)]
 pub enum NodeKind {
     Mesh(Vec<MeshId>),
-    Collider,
+    /// A `COL_` node: not drawn. Holds its walls as model-space segments
+    /// (vertical triangles flattened to a line on the xz plane).
+    Collider(Vec<[Vec3; 2]>),
     Empty,
 }
 pub struct Node {

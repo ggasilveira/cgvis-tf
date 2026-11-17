@@ -182,12 +182,6 @@ impl AssetManager {
         materials: &HashMap<usize, MaterialId>,
         buffers: &[gltf::buffer::Data],
     ) -> anyhow::Result<usize> {
-        let mut meshes = Vec::new();
-        // a GLTF primitive is our mesh, and a gltf mesh is our model
-        for primitive in node.mesh().unwrap().primitives() {
-            meshes
-                .push(self.add_mesh(self.gltf_primitive2mesh(ctx, materials, buffers, primitive)?));
-        }
         let node_index = model_nodes.len();
         let node_name = node
             .name()
@@ -195,13 +189,31 @@ impl AssetManager {
             .unwrap_or_else(|| format!("node_{node_index}"));
 
         let local = glam::Mat4::from_cols_array_2d(&node.transform().matrix());
+        let model_space = parent.map_or(glam::Mat4::IDENTITY, |p| model_nodes[p].model_space) * local;
+
+        let kind = match node.mesh() {
+            None => NodeKind::Empty,
+            Some(mesh) if node_name.starts_with("COL_") => {
+                NodeKind::Collider(collider_walls(mesh, buffers, model_space)?)
+            }
+            Some(mesh) => {
+                let mut meshes = Vec::new();
+                // a GLTF primitive is our mesh, and a gltf mesh is our model
+                for primitive in mesh.primitives() {
+                    meshes.push(self.add_mesh(
+                        self.gltf_primitive2mesh(ctx, materials, buffers, primitive)?,
+                    ));
+                }
+                NodeKind::Mesh(meshes)
+            }
+        };
         model_nodes.push(Node {
             name: node_name,
             parent,
             children: Vec::new(),
             local,
-            model_space: local,
-            kind: NodeKind::Mesh(meshes),
+            model_space,
+            kind,
         });
 
         for child in node.children() {
@@ -303,6 +315,62 @@ impl AssetManager {
         self.models.push(model);
         Ok(ModelId(idx))
     }
+}
+
+/// Triangles whose lowest point is higher than this above the bottom of the
+/// collider mesh (e.g. the wall above a doorway) don't block movement.
+const WALL_MAX_BASE: f32 = 1.0;
+
+/// Flattens the vertical triangles of a `COL_` mesh into model-space wall
+/// segments for the 2D (xz) collision.
+fn collider_walls(
+    mesh: gltf::Mesh,
+    buffers: &[gltf::buffer::Data],
+    model_space: glam::Mat4,
+) -> anyhow::Result<Vec<[Vec3; 2]>> {
+    let mut triangles = Vec::new();
+    for primitive in mesh.primitives() {
+        let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
+        let positions: Vec<Vec3> = reader
+            .read_positions()
+            .context("GLTF collider without vertex positions")?
+            .map(|p| model_space.transform_point3(p.into()))
+            .collect();
+        let indices: Vec<u32> = reader
+            .read_indices()
+            .context("GLTF collider without indices")?
+            .into_u32()
+            .collect();
+        for t in indices.as_chunks::<3>().0 {
+            triangles.push(t.map(|i| positions[i as usize]));
+        }
+    }
+    let floor = triangles
+        .iter()
+        .flatten()
+        .map(|p| p.y)
+        .fold(f32::INFINITY, f32::min);
+
+    let mut walls = Vec::new();
+    for [a, b, c] in triangles {
+        let normal = (b - a).cross(c - a);
+        let vertical = normal.y.abs() < 0.3 * normal.length();
+        if !vertical || a.y.min(b.y).min(c.y) > floor + WALL_MAX_BASE {
+            continue;
+        }
+        // The triangle projects to (almost) a line: keep its two farthest points.
+        let flat = |p: Vec3| Vec2::new(p.x, p.z);
+        let wall = [[a, b], [b, c], [c, a]]
+            .into_iter()
+            .max_by(|x, y| {
+                let dx = flat(x[0]).distance_squared(flat(x[1]));
+                let dy = flat(y[0]).distance_squared(flat(y[1]));
+                dx.total_cmp(&dy)
+            })
+            .unwrap();
+        walls.push(wall);
+    }
+    Ok(walls)
 }
 
 fn build_normal_space(vertices: &mut [ModelVertex], indices: &[ModelIndex]) {

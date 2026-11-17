@@ -14,8 +14,16 @@ pub struct Rect {
     pub half_extents: Vec2,
 }
 
+/// segmento de parede no plano xz, em coordenadas do mundo.
+#[derive(Debug, Clone, Copy)]
+pub struct Segment {
+    pub a: Vec2,
+    pub b: Vec2,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum Hitbox {
     Circle(Circle),
     Rect(Rect),
+    Segment(Segment),
 }

@@ -1,3 +1,2 @@
 model = "models/ground.glb"
 mobility = "static"
-colliders = "model"

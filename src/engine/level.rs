@@ -189,3 +189,30 @@ fn unit_scale() -> [f32; 3] {
 fn one_u32() -> u32 {
     1
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prefabs_parse() {
+        for entry in std::fs::read_dir("prefabs").unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "toml") {
+                PrefabDef::load(&path).unwrap_or_else(|e| panic!("{}: {e:#}", path.display()));
+            }
+        }
+    }
+
+    #[test]
+    fn levels_parse_and_reference_existing_prefabs() {
+        for entry in std::fs::read_dir("levels").unwrap() {
+            let path = entry.unwrap().path();
+            let level = LevelDef::load(&path).unwrap_or_else(|e| panic!("{}: {e:#}", path.display()));
+            for instance in &level.instances {
+                let prefab = std::path::Path::new("prefabs").join(format!("{}.toml", instance.prefab));
+                assert!(prefab.exists(), "{}: missing {}", path.display(), prefab.display());
+            }
+        }
+    }
+}

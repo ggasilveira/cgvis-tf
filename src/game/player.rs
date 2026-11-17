@@ -4,6 +4,8 @@ pub struct Player {
     pitch: f32,
     yaw: f32,
     speed: f32,
+    /// Size of the player's body for collisions.
+    radius: f32,
     /// Radians per pixel of mouse movement.
     sensitivity: f32,
 }
@@ -13,6 +15,7 @@ impl Player {
             pitch: 0.0,
             yaw: 0.0,
             speed: 4.0,
+            radius: 0.3,
             sensitivity: 0.005,
         }
     }
@@ -43,12 +46,18 @@ impl Behaviour for Player {
             self.speed
         };
 
-        let position = {
-            let transform = ctx.transform_mut();
-            transform.position += dir.normalize_or_zero() * speed * delta;
-            transform.rotation = Quat::from_rotation_y(self.yaw);
-            transform.position
-        };
+        let mut position = ctx.transform().position + dir.normalize_or_zero() * speed * delta;
+        let center = ctx.resolve_circle(Circle {
+            center: Vec2::new(position.x, position.z),
+            radius: self.radius,
+        });
+        position.x = center.x;
+        position.z = center.y;
+
+        let transform = ctx.transform_mut();
+        transform.position = position;
+        transform.rotation = Quat::from_rotation_y(self.yaw);
+
         let look = self.look_direction();
         let camera = ctx.camera_mut();
         camera.eye = position;

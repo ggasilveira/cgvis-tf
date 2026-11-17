@@ -32,19 +32,24 @@
 //! ```
 
 use super::input::Input;
-use super::level::{self, LevelDef, PrefabDef};
+use super::level::{self, ColliderDef, ColliderSource, LevelDef, PrefabDef, ShapeDef};
 use crate::math::Transform;
+use crate::phys::collider::{Collider, Shape};
+use crate::phys::collision::circle_push;
+use crate::phys::hitbox::{Circle, Hitbox};
 use crate::render::asset_id::ModelId;
 use crate::render::asset_manager::AssetManager;
 use crate::render::camera::Camera;
 use crate::render::context::RenderContext;
 use crate::render::light::Light;
+use crate::render::model::NodeKind;
 use crate::render::scene::{Instance, InstanceKey, Mobility, Scene};
-use glam::{Quat, Vec3};
+use glam::{Quat, Vec2, Vec3};
 use slotmap::{SlotMap, new_key_type};
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Game code entry point: spawns the initial objects.
 pub type Setup = fn(&mut Context) -> anyhow::Result<()>;
@@ -93,6 +98,8 @@ pub struct GameObject {
     pub name: String,
     /// Authoritative transform; copied to the rendered instance every frame.
     pub transform: Transform,
+    /// Collision shapes in local space (2D, on the xz plane).
+    pub colliders: Vec<Collider>,
     instance: Option<InstanceKey>,
     behaviours: Vec<BehaviourSlot>,
     destroyed: bool,
@@ -116,6 +123,9 @@ pub struct World {
     /// instance buffer gets rebuilt.
     pub(super) static_dirty: bool,
     models: HashMap<String, ModelId>,
+    /// Walls from each model's `COL_` nodes.
+    model_walls: HashMap<ModelId, Arc<[[Vec3; 2]]>>,
+    warned_no_walls: HashSet<ModelId>,
     prefabs: HashMap<String, PrefabDef>,
     prefab_dir: PathBuf,
 }
@@ -128,6 +138,8 @@ impl World {
             camera,
             static_dirty: true,
             models: HashMap::new(),
+            model_walls: HashMap::new(),
+            warned_no_walls: HashSet::new(),
             prefabs: HashMap::new(),
             prefab_dir: prefab_dir.into(),
         }
@@ -323,6 +335,57 @@ impl<'a> Context<'a> {
     }
 
     // -----------------------------------------------------------------------
+    // Collision
+    // -----------------------------------------------------------------------
+
+    /// Objects whose colliders overlap `circle`, except the running behaviour's own.
+    pub fn overlapping(&self, circle: Circle) -> Vec<GameObjectId> {
+        let mut found = Vec::new();
+        self.for_each_hitbox(|id, hitbox| {
+            if found.last() != Some(&id) && circle_push(&circle, hitbox).is_some() {
+                found.push(id);
+            }
+        });
+        found
+    }
+
+    /// Moves `circle` out of every collider it overlaps, except the running
+    /// behaviour's own, and returns its corrected center.
+    pub fn resolve_circle(&self, mut circle: Circle) -> Vec2 {
+        // Pushing out of one collider can push into another: repeat a few times.
+        for _ in 0..4 {
+            let mut moved = false;
+            self.for_each_hitbox(|_, hitbox| {
+                if let Some(push) = circle_push(&circle, hitbox) {
+                    circle.center += push;
+                    moved = true;
+                }
+            });
+            if !moved {
+                break;
+            }
+        }
+        circle.center
+    }
+
+    fn for_each_hitbox(&self, mut f: impl FnMut(GameObjectId, &Hitbox)) {
+        let mut hitboxes = Vec::new();
+        for (id, object) in &self.world.objects {
+            if Some(id) == self.this || object.destroyed || object.colliders.is_empty() {
+                continue;
+            }
+            hitboxes.clear();
+            let world = object.transform.mat4();
+            for collider in &object.colliders {
+                collider.hitboxes(world, &mut hitboxes);
+            }
+            for hitbox in &hitboxes {
+                f(id, hitbox);
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Spawning and destroying
     // -----------------------------------------------------------------------
 
@@ -331,6 +394,7 @@ impl<'a> Context<'a> {
         let id = self.world.objects.insert(GameObject {
             name: name.into(),
             transform: Transform::IDENTITY,
+            colliders: Vec::new(),
             instance: None,
             behaviours: Vec::new(),
             destroyed: false,
@@ -377,13 +441,22 @@ impl<'a> Context<'a> {
         transform: Transform,
         mobility: Mobility,
     ) -> anyhow::Result<GameObjectId> {
-        let model = self.prefab(name)?.model.clone();
-        let id = self
+        let prefab = self.prefab(name)?;
+        let model = prefab.model.clone();
+        let from_model = prefab.colliders == Some(ColliderSource::Model);
+        let colliders: Vec<_> = prefab.collider_defs.iter().map(convert_collider).collect();
+
+        let mut object = self
             .spawn(name)
             .with_transform(transform)
-            .with_model(&model, mobility)?
-            .id();
-        Ok(id)
+            .with_model(&model, mobility)?;
+        if from_model {
+            object = object.with_model_colliders();
+        }
+        for collider in colliders {
+            object = object.with_collider(collider);
+        }
+        Ok(object.id())
     }
 
     fn prefab(&mut self, name: &str) -> anyhow::Result<&PrefabDef> {
@@ -402,6 +475,19 @@ impl<'a> Context<'a> {
         }
         let model = self.assets.load_glb_model(self.gpu, path)?;
         self.world.models.insert(path.to_owned(), model);
+
+        let walls: Arc<[[Vec3; 2]]> = self
+            .assets
+            .get_model(model)
+            .nodes
+            .iter()
+            .filter_map(|node| match &node.kind {
+                NodeKind::Collider(walls) => Some(walls.iter().copied()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        self.world.model_walls.insert(model, walls);
         Ok(model)
     }
 }
@@ -451,9 +537,50 @@ impl ObjectBuilder<'_, '_> {
         world.static_dirty |= mobility == Mobility::Static;
         Ok(self)
     }
+    pub fn with_collider(self, collider: Collider) -> Self {
+        self.ctx.world.objects[self.id].colliders.push(collider);
+        self
+    }
+    /// Uses the walls from the `COL_` nodes of the object's model (set it
+    /// first with `with_model`). Logs a warning if the model has none.
+    pub fn with_model_colliders(self) -> Self {
+        let world = &mut *self.ctx.world;
+        let object = &mut world.objects[self.id];
+        let model = object
+            .instance
+            .and_then(|k| world.scene.instances.get(k))
+            .map(|instance| instance.model);
+        match model.and_then(|m| world.model_walls.get(&m)) {
+            Some(walls) if !walls.is_empty() => {
+                object.colliders.push(Collider::Walls(walls.clone()))
+            }
+            _ => {
+                if model.is_none_or(|m| world.warned_no_walls.insert(m)) {
+                    log::warn!("{}: model has no COL_ collider nodes", object.name);
+                }
+            }
+        }
+        self
+    }
     pub fn with_behaviour(self, behaviour: impl Behaviour) -> Self {
         self.ctx.add_behaviour(self.id, behaviour);
         self
+    }
+}
+
+fn convert_collider(def: &ColliderDef) -> Collider {
+    let shape = match def.shape {
+        ShapeDef::Box { half_extents } => Shape::Box {
+            half_extents: Vec3::from_array(half_extents),
+        },
+        ShapeDef::Sphere { radius } => Shape::Sphere { radius },
+        ShapeDef::Capsule { radius, height } => Shape::Capsule { radius, height },
+        ShapeDef::Cylinder { radius, height } => Shape::Cylinder { radius, height },
+    };
+    Collider::Shape {
+        shape,
+        offset: Vec3::from_array(def.offset),
+        rotation: Quat::from_array(def.rotation).normalize(),
     }
 }
 

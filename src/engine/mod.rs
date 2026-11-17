@@ -21,6 +21,8 @@ use winit::keyboard::PhysicalKey;
 pub mod prelude {
     pub use super::{Behaviour, Context, GameObject, GameObjectId, Input, Time};
     pub use crate::math::Transform;
+    pub use crate::phys::collider::{Collider, Shape};
+    pub use crate::phys::hitbox::{Circle, Hitbox, Rect};
     pub use crate::render::camera::Camera;
     pub use crate::render::light::{DirectionalLight, Light, PointLight, SpotLight};
     pub use crate::render::scene::Mobility;
