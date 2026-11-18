@@ -3,5 +3,5 @@ mobility = "static"
 
 [[collider]]
 shape = "cylinder"
-radius = 0.5
+radius = 1.0
 height = 14.6

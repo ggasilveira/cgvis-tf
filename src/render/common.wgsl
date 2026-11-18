@@ -18,7 +18,7 @@ const SKY_ZENITH: vec3<f32> = vec3(0.002, 0.003, 0.008);
 const FOG_COLOR: vec3<f32> = vec3(0.0);
 
 // Exponential-squared fog: ~45% visibility at 90m.
-const FOG_DENSITY: f32 = 0.01;
+const FOG_DENSITY: f32 = 0.03;
 
 fn sky_color(dir: vec3<f32>) -> vec3<f32> {
     let up = clamp(normalize(dir).y, 0.0, 1.0);

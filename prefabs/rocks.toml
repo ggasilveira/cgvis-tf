@@ -1,7 +1,4 @@
 model = "models/rocks.glb"
 mobility = "static"
 
-[[collider]]
-shape = "box"
-half_extents = [4.77, 4.25, 2.97]
-offset = [0.0, 2.13, 0.0]
+colliders = "model"

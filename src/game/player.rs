@@ -30,9 +30,9 @@ impl Behaviour for Player {
             position: t.position,
             direction: self.look_direction(),
             color: Vec3::ONE,
-            intensity: 5.0,
-            inner_angle: 5f32.to_radians(),
-            outer_angle: 20f32.to_radians(),
+            intensity: 8.0,
+            inner_angle: 10f32.to_radians(),
+            outer_angle: 30f32.to_radians(),
         }))
     }
     fn update(&mut self, ctx: &mut Context) {
@@ -69,14 +69,16 @@ impl Behaviour for Player {
         let transform = ctx.transform_mut();
         transform.position = position;
         transform.rotation = Quat::from_rotation_y(self.yaw);
+        let light_offset = transform.rotation * Vec3::new(-0.5, -1.0, 0.0);
 
         let look = self.look_direction();
         let camera = ctx.camera_mut();
         camera.eye = position;
         camera.target = position + look;
+
         if let Light::Spot(l) = &mut ctx.lights_mut()[0] {
+            l.position = position + light_offset;
             l.direction = look;
-            l.position = position;
         }
     }
 }

@@ -1,7 +1,4 @@
 model = "models/shed_truck.glb"
 mobility = "static"
 
-[[collider]]
-shape = "box"
-half_extents = [1, 1, 1.7]
-offset = [0.0, 1.0, 0.0]
+colliders = "model"

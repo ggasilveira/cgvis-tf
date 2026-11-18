@@ -1,7 +1,4 @@
 model = "models/brick_cross.glb"
 mobility = "static"
 
-[[collider]]
-shape = "box"
-half_extents = [5.06, 1.69, 5.06]
-offset = [0.0, 1.7, 0.0]
+colliders = "model"
