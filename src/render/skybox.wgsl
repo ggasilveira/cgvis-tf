@@ -1,6 +1,6 @@
 // Procedural sky: one triangle covering the screen at the far plane. Drawn
 // after opaque geometry, so it only shades pixels nothing else covered.
-// `common.wgsl` is prepended (camera, sky_color).
+// `common.wgsl` is prepended (camera, sky_color, apply_sky_fog).
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -19,11 +19,11 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VertexOutput {
 // holds at most one star.
 const STAR_GRID: f32 = 250.0;
 // Fraction of cells with a star.
-const STAR_DENSITY: f32 = 0.04;
+const STAR_DENSITY: f32 = 0.01;
 // Star radius, in cells. Smaller than a pixel stars are widened to a pixel
 // and dimmed to match, so they don't flicker when the camera turns.
 const STAR_RADIUS: f32 = 0.06;
-const STAR_BRIGHTNESS: f32 = 0.6;
+const STAR_BRIGHTNESS: f32 = 0.3;
 
 const MOON_DIR: vec3<f32> = vec3(-0.45, 0.35, -0.82);
 // Angular radius, in radians (the real moon is ~0.0045; this reads better).
@@ -54,9 +54,9 @@ fn stars(dir: vec3<f32>) -> vec3<f32> {
     let cell = vec3<i32>(floor(p));
     var color = vec3(0.0);
     // A star projected onto the sphere can leave its cell, so check neighbours.
-    for (var x = -1; x <= 1; x++) {
-        for (var y = -1; y <= 1; y++) {
-            for (var z = -1; z <= 1; z++) {
+    for(var x = -1; x <= 1; x++) {
+        for(var y = -1; y <= 1; y++) {
+            for(var z = -1; z <= 1; z++) {
                 let c = cell + vec3(x, y, z);
                 let h = hash3(c);
                 if h.x > STAR_DENSITY {
@@ -116,5 +116,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let dir = normalize(far.xyz / far.w - camera.view_pos.xyz);
     let m = moon(dir);
     let color = sky_color(dir) + stars(dir) * (1.0 - m.a) + m.rgb;
-    return vec4(color, 1.0);
+    return vec4(apply_sky_fog(color, dir), 1.0);
 }

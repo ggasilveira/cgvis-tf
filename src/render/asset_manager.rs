@@ -375,7 +375,6 @@ fn collider_walls(
 }
 
 fn build_normal_space(vertices: &mut [ModelVertex], indices: &[ModelIndex]) {
-    let mut triangles_included = vec![0; vertices.len()];
     for c in indices.chunks(3) {
         let c0 = c[0].0 as usize;
         let c1 = c[1].0 as usize;
@@ -401,30 +400,34 @@ fn build_normal_space(vertices: &mut [ModelVertex], indices: &[ModelIndex]) {
         // tangent and bitangent calculation black magic. see learnwgpu:
         // https://sotrh.github.io/learn-wgpu/intermediate/tutorial11-normals
         let r = 1.0 / (delta_uv1.x * delta_uv2.y - delta_uv1.y * delta_uv2.x);
+        // UVs collapsed to a line/point: no tangent direction, and r is
+        // infinite, which would turn the shared vertices' tangents into NaN
+        if !r.is_finite() {
+            continue;
+        }
         let tangent = (delta_pos1 * delta_uv2.y - delta_pos2 * delta_uv1.y) * r;
         // We flip the bitangent to enable right-handed normal
         // maps with wgpu texture coordinate system
         let bitangent = (delta_pos2 * delta_uv1.x - delta_pos1 * delta_uv2.x) * -r;
 
-        vertices[c0].tangent = (tangent + Vec3::from(vertices[c0].tangent)).into();
-        vertices[c1].tangent = (tangent + Vec3::from(vertices[c1].tangent)).into();
-        vertices[c2].tangent = (tangent + Vec3::from(vertices[c2].tangent)).into();
-        vertices[c0].bitangent = (bitangent + Vec3::from(vertices[c0].bitangent)).into();
-        vertices[c1].bitangent = (bitangent + Vec3::from(vertices[c1].bitangent)).into();
-        vertices[c2].bitangent = (bitangent + Vec3::from(vertices[c2].bitangent)).into();
-
-        // used to average the tangents/bitangents
-        triangles_included[c0] += 1;
-        triangles_included[c1] += 1;
-        triangles_included[c2] += 1;
+        for i in [c0, c1, c2] {
+            vertices[i].tangent = (tangent + Vec3::from(vertices[i].tangent)).into();
+            vertices[i].bitangent = (bitangent + Vec3::from(vertices[i].bitangent)).into();
+        }
     }
 
-    // average the tangents/bitangents
-    for (i, n) in triangles_included.into_iter().enumerate() {
-        let denom = 1.0 / n as f32;
-        let v = &mut vertices[i];
-        v.tangent = (Vec3::from(v.tangent) * denom).into();
-        v.bitangent = (Vec3::from(v.bitangent) * denom).into();
+    // Orthonormalize the summed tangents against the vertex normal
+    // (Gram-Schmidt), keeping the bitangent's handedness for mirrored UVs.
+    for v in vertices {
+        let n = Vec3::from(v.normal).normalize_or(Vec3::Y);
+        let t = Vec3::from(v.tangent);
+        let t = (t - n * n.dot(t))
+            .try_normalize()
+            .unwrap_or_else(|| n.any_orthonormal_vector());
+        let b = n.cross(t);
+        let handedness = if b.dot(v.bitangent.into()) < 0.0 { -1.0 } else { 1.0 };
+        v.tangent = t.into();
+        v.bitangent = (b * handedness).into();
     }
 }
 

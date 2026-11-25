@@ -109,7 +109,7 @@ fn sample_light(light: Light, pos: vec3<f32>) -> LightSample {
     let dist2 = max(dot(to_light, to_light), 1e-4);
     out.dir = to_light * inverseSqrt(dist2);
     // inverse square falloff
-    var attenuation = light.intensity / dist2;
+    var attenuation = light.intensity / pow(dist2, 0.6);
     if light.typ == LIGHT_SPOT {
         // angles are half-angles of the cone, in radians
         let cos_angle = dot(-out.dir, normalize(light.direction));

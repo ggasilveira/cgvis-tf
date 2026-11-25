@@ -14,7 +14,7 @@ impl Player {
         Self {
             pitch: 0.0,
             yaw: 0.0,
-            speed: 4.0,
+            speed: 10.0,
             radius: 0.3,
             sensitivity: 0.005,
         }
@@ -30,8 +30,8 @@ impl Behaviour for Player {
             position: t.position,
             direction: self.look_direction(),
             color: Vec3::ONE,
-            intensity: 8.0,
-            inner_angle: 10f32.to_radians(),
+            intensity: 4.0,
+            inner_angle: 20f32.to_radians(),
             outer_angle: 30f32.to_radians(),
         }))
     }
