@@ -9,6 +9,65 @@ struct Camera {
 @group(0) @binding(0)
 var<uniform> camera: Camera;
 
+const LIGHT_DIR: u32 = 0;
+const LIGHT_POINT: u32 = 1;
+const LIGHT_SPOT: u32 = 2;
+struct Light {
+    // 16 bytes
+    position: vec3<f32>,
+    typ: u32,
+
+    // 16 bytes
+    direction: vec3<f32>,
+    padding0: u32,
+
+    // 16 bytes
+    color: vec3<f32>,
+    intensity: f32,
+
+    // 16 bytes
+    inner_angle: f32,
+    outer_angle: f32,
+    padding1: u32,
+    padding2: u32,
+}
+const LIGHTS_MAX: u32 = 16; // uniform::LIGHTS_SIZE
+struct LightsUniform {
+    lights: array<Light, LIGHTS_MAX>,
+    size: u32,
+}
+
+@group(0) @binding(1)
+var<uniform> lights: LightsUniform;
+
+// Direction towards the light and how much of it reaches `pos` (attenuation
+// and spot cone), for a light of any type.
+struct LightSample {
+    dir: vec3<f32>,
+    radiance: vec3<f32>,
+}
+
+fn sample_light(light: Light, pos: vec3<f32>) -> LightSample {
+    var out: LightSample;
+    if light.typ == LIGHT_DIR {
+        out.dir = normalize(-light.direction);
+        out.radiance = light.color * light.intensity;
+        return out;
+    }
+    let to_light = light.position - pos;
+    let dist2 = max(dot(to_light, to_light), 1e-4);
+    out.dir = to_light * inverseSqrt(dist2);
+    // inverse square falloff
+    var attenuation = light.intensity / pow(dist2, 0.6);
+    if light.typ == LIGHT_SPOT {
+        // angles are half-angles of the cone, in radians
+        let cos_angle = dot(-out.dir, normalize(light.direction));
+        attenuation *= smoothstep(cos(light.outer_angle), cos(light.inner_angle), cos_angle);
+    }
+    out.radiance = light.color * attenuation;
+    return out;
+}
+
 // 3am sky gradient, in linear color: deep navy with a faint glow at the
 // horizon, so tree silhouettes stand out against it.
 const SKY_HORIZON: vec3<f32> = vec3(0.009, 0.0078, 0.0066);

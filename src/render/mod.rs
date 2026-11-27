@@ -4,6 +4,7 @@ pub mod bindgroup;
 pub mod buffer;
 pub mod camera;
 pub mod context;
+pub mod grass;
 pub mod instance_buffer;
 pub mod light;
 pub mod manager;

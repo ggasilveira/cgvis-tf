@@ -41,9 +41,11 @@ use crate::render::asset_id::ModelId;
 use crate::render::asset_manager::AssetManager;
 use crate::render::camera::Camera;
 use crate::render::context::RenderContext;
+use crate::render::grass::GrassGround;
 use crate::render::light::Light;
 use crate::render::model::NodeKind;
 use crate::render::scene::{Instance, InstanceKey, Mobility, Scene};
+use anyhow::Context as _;
 use glam::{Quat, Vec2, Vec3};
 use slotmap::{SlotMap, new_key_type};
 use std::any::Any;
@@ -128,6 +130,8 @@ pub struct World {
     warned_no_walls: HashSet<ModelId>,
     prefabs: HashMap<String, PrefabDef>,
     prefab_dir: PathBuf,
+    /// A new grass ground, picked up by the renderer.
+    pub(super) grass_ground: Option<GrassGround>,
 }
 impl World {
     pub(super) fn new(camera: Camera, prefab_dir: impl Into<PathBuf>) -> Self {
@@ -142,6 +146,7 @@ impl World {
             warned_no_walls: HashSet::new(),
             prefabs: HashMap::new(),
             prefab_dir: prefab_dir.into(),
+            grass_ground: None,
         }
     }
 
@@ -258,6 +263,61 @@ impl<'a> Context<'a> {
     /// Closes the game at the end of the frame.
     pub fn quit(&mut self) {
         *self.quit = true;
+    }
+    /// Grows grass on `node`, a mesh node of the object's model (e.g.
+    /// "model_ground"), following its height. The surface is read once, at
+    /// its current position: call again if the object moves.
+    ///
+    /// `mask` is an optional grayscale image (path relative to the assets
+    /// directory) of where grass grows, seen from above and stretched over
+    /// the node's xz bounds: white is full grass, gray sparser, black none.
+    /// Its top row is the -z edge (the top of Blender's top view).
+    pub fn set_grass_ground(
+        &mut self,
+        id: GameObjectId,
+        node: &str,
+        mask: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let mask = mask
+            .map(|path| {
+                let path = self.assets.path(path);
+                image::open(&path)
+                    .map(|image| image.to_luma8())
+                    .with_context(|| format!("set_grass_ground: loading {}", path.display()))
+            })
+            .transpose()?;
+        let object = self
+            .world
+            .objects
+            .get(id)
+            .context("set_grass_ground: object doesn't exist")?;
+        let instance = object
+            .instance
+            .and_then(|k| self.world.scene.instances.get(k))
+            .with_context(|| format!("set_grass_ground: {} has no model", object.name))?;
+        let model = self.assets.get_model(instance.model);
+        let found = model
+            .nodes
+            .iter()
+            .find(|n| n.name == node)
+            .with_context(|| format!("set_grass_ground: {} has no node {node}", object.name))?;
+        let NodeKind::Mesh(meshes) = &found.kind else {
+            anyhow::bail!("set_grass_ground: node {node} isn't a mesh");
+        };
+
+        let world = object.transform.mat4() * found.model_space;
+        let mut triangles = Vec::new();
+        for &mesh in meshes {
+            let mesh = self.assets.get_mesh(mesh);
+            let p = |i: u32| world.transform_point3(mesh.positions[i as usize]);
+            triangles.extend(
+                mesh.indices
+                    .chunks_exact(3)
+                    .map(|t| [p(t[0]), p(t[1]), p(t[2])]),
+            );
+        }
+        self.world.grass_ground = Some(GrassGround { triangles, mask });
+        Ok(())
     }
 
     // -----------------------------------------------------------------------

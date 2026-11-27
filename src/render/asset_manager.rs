@@ -96,6 +96,10 @@ impl AssetManager {
     pub fn models(&self) -> impl Iterator<Item = (ModelId, &Model)> {
         self.models.iter().enumerate().map(|(i, m)| (ModelId(i), m))
     }
+    /// Full path of a file in the assets directory.
+    pub fn path(&self, filename: &str) -> PathBuf {
+        self.res_path.join(filename)
+    }
     /// Loads an image as a texture into the GPU and returns its handle.
     /// The filename must be relative to the resources path
     pub fn load_texture(
@@ -170,6 +174,8 @@ impl AssetManager {
             index_buffer: Buffer::new(&ctx.device, &indices),
             material: mat,
             num_elements: indices.len() as u32,
+            positions: vertices.iter().map(|v| Vec3::from_array(v.position)).collect(),
+            indices: indices.iter().map(|i| i.0).collect(),
         })
     }
     fn visit_glb_node(

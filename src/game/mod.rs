@@ -7,6 +7,9 @@ use player::Player;
 
 pub fn setup(ctx: &mut Context) -> anyhow::Result<()> {
     ctx.load_level("levels/forest.toml")?;
+    if let Some(ground) = ctx.find("ground") {
+        ctx.set_grass_ground(ground, "model_ground", Some("textures/grass_mask.png"))?;
+    }
 
     for id in ctx.find_all("door") {
         ctx.add_behaviour(id, Door::new(90.0));

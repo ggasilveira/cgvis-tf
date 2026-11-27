@@ -193,6 +193,11 @@ impl Engine {
             self.world.static_dirty = false;
         }
         self.render.update_camera(&self.context, &self.world.camera);
+        if let Some(ground) = self.world.grass_ground.take() {
+            self.render.set_grass_ground(&self.context, &ground);
+        }
+        self.render
+            .update_grass(&self.context, &self.world.camera, self.time.elapsed);
         self.render
             .update_lights(&self.context, &self.world.scene.lights);
         self.input.end_frame();

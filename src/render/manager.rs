@@ -9,6 +9,7 @@ use crate::render::bindgroup::{
 use crate::render::buffer::Buffer;
 use crate::render::camera::Camera;
 use crate::render::context::RenderContext;
+use crate::render::grass::{Grass, GrassGround};
 use crate::render::light::Light;
 use crate::render::model;
 use crate::render::pipeline::MaterialPipelineLayout;
@@ -23,6 +24,7 @@ pub struct RenderManager {
     is_surface_configured: bool,
     pub scene_render: SceneRenderer,
     skybox: Skybox,
+    grass: Grass,
     camera_buffer: Buffer<CameraUniform>,
     depth_texture: texture::Texture,
     lights_uniform: LightsUniform,
@@ -77,6 +79,11 @@ impl RenderManager {
             &global_bind_group_layout,
             context.config.format,
         );
+        let grass = Grass::new(
+            &context.device,
+            &global_bind_group_layout,
+            context.config.format,
+        );
 
         Ok(Self {
             is_surface_configured: false,
@@ -87,6 +94,7 @@ impl RenderManager {
             depth_texture,
             scene_render,
             skybox,
+            grass,
             instance_buffer_bind_group_layout,
         })
     }
@@ -107,6 +115,14 @@ impl RenderManager {
         self.lights_uniform.update(lights);
         self.lights_buffer
             .update(&context.queue, &self.lights_uniform);
+    }
+
+    /// See `Grass::set_ground`.
+    pub fn set_grass_ground(&mut self, context: &RenderContext, ground: &GrassGround) {
+        self.grass.set_ground(context, ground);
+    }
+    pub fn update_grass(&mut self, context: &RenderContext, camera: &Camera, time: f32) {
+        self.grass.update(context, camera, time);
     }
 
     pub fn render(
@@ -178,6 +194,7 @@ impl RenderManager {
         self.scene_render.update(context, assets, scene, camera_pos);
         render_pass.set_bind_group(GlobalBindGroup::GROUP, self.global_bg.bind_group(), &[]);
         self.scene_render.draw_solid(&mut render_pass, assets);
+        self.grass.draw(&mut render_pass);
         self.skybox.draw(&mut render_pass);
         self.scene_render.draw_transparent(&mut render_pass, assets);
 

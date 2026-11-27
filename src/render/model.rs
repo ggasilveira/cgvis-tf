@@ -8,6 +8,9 @@ pub struct Mesh {
     pub index_buffer: Buffer<[ModelIndex]>,
     pub num_elements: u32,
     pub material: MaterialId,
+    /// CPU copy of the geometry, for baking (e.g. the grass heightmap).
+    pub positions: Vec<Vec3>,
+    pub indices: Vec<u32>,
 }
 
 pub struct Model {
