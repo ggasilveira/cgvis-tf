@@ -1,0 +1,6 @@
+model = "models/door.glb"
+mobility = "dynamic"
+
+[[collider]]
+shape = "box"
+half_extents = [1.15, 5.0, 0.12]
