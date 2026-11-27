@@ -11,7 +11,7 @@ pub struct Door {
 impl Door {
     pub fn new(open_angle_deg: f32) -> Self {
         Self {
-            open_angle: open_angle_deg,
+            open_angle: open_angle_deg.to_radians(),
             speed: std::f32::consts::PI / 1.5,
             open: false,
             angle: 0.0,
@@ -32,7 +32,7 @@ impl Behaviour for Door {
             let near = ctx
                 .find("player")
                 .and_then(|p| ctx.object(p))
-                .is_some_and(|p| p.transform.position.distance(hinge) < 4.0);
+                .is_some_and(|p| p.transform.position.distance(hinge) < 6.0);
             if near {
                 self.open = !self.open;
             }
